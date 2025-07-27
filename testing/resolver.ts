@@ -52,12 +52,43 @@ export async function resolverWorkflow(order: Order): Promise<void> {
     console.log("Resolver Address:", resolverSigner.address);
     console.log("Order ID:", order.orderId);
     console.log("Swap: 0.01 WETH (Sepolia) → 0.01 WBNB (BSC Testnet)");
+
+    console.log("\n--- Step 1: Create Source Escrow on Sepolia ---");
     
-    if (!order.srcEscrowAddress) {
-      throw new Error("Source escrow address not found in order");
+    // Create source escrow (resolver calls this)
+    const srcFactoryContract = new ethers.Contract(SEPOLIA_FACTORY_ADDRESS, factoryABI, resolverSigner);
+    
+    const createSrcEscrowTx = await srcFactoryContract.createSrcEscrow(
+      order.hashedSecret,
+      resolverSigner.address, // recipient is resolver (will receive WETH)
+      order.buyerAddress, // buyer is the buyer (provides WETH)
+      order.srcAmount,
+      order.withdrawalStart,
+      order.publicWithdrawalStart,
+      order.cancellationStart,
+      order.publicCancellationStart,
+      { value: ethers.utils.parseEther("0.001") } // deposit amount
+    );
+    
+    const srcReceipt = await createSrcEscrowTx.wait();
+    console.log("✅ Source escrow creation transaction:", srcReceipt.transactionHash);
+    
+    // Extract source escrow address from event
+    const srcEscrowCreatedTopic = ethers.utils.id("SrcEscrowCreated(address,address,address,bytes32,uint256,uint256,uint256,uint256,uint256)");
+    const srcEscrowCreatedEvent = srcReceipt.logs.find((log: any) => 
+      log.topics && log.topics[0] === srcEscrowCreatedTopic
+    );
+    
+    let srcEscrowAddress = "";
+    if (srcEscrowCreatedEvent) {
+      srcEscrowAddress = ethers.utils.getAddress("0x" + srcEscrowCreatedEvent.data.slice(26, 66));
+      console.log("✅ Source Escrow Address:", srcEscrowAddress);
+      order.srcEscrowAddress = srcEscrowAddress;
+    } else {
+      throw new Error("Could not extract source escrow address from event");
     }
 
-    console.log("\n--- Step 1: Create Destination Escrow on BSC Testnet ---");
+    console.log("\n--- Step 2: Create Destination Escrow on BSC Testnet ---");
     
     // First, wrap BNB to WBNB if needed
     const wbnbContract = new ethers.Contract(
@@ -90,17 +121,17 @@ export async function resolverWorkflow(order: Order): Promise<void> {
 
     // Create destination escrow
     const dstFactoryContract = new ethers.Contract(BSC_TESTNET_FACTORY_ADDRESS, factoryABI, dstSigner);
-
+    
     const createDstEscrowTx = await dstFactoryContract.createDstEscrow(
-    order.hashedSecret,
+      order.hashedSecret,
       order.buyerAddress, // recipient is the buyer (they will receive BNB)
       order.dstAmount,
-    order.withdrawalStart,
-    order.publicWithdrawalStart,
-    order.cancellationStart,
+      order.withdrawalStart,
+      order.publicWithdrawalStart,
+      order.cancellationStart,
       { value: ethers.utils.parseEther("0.001") } // deposit amount
-  );
-  
+    );
+    
     const dstReceipt = await createDstEscrowTx.wait();
     console.log("✅ Destination escrow creation transaction:", dstReceipt.transactionHash);
     
@@ -113,7 +144,7 @@ export async function resolverWorkflow(order: Order): Promise<void> {
         address: log.address
       });
     });
-
+    
     // Extract destination escrow address from event - try multiple approaches
     let dstEscrowAddress = "";
     
@@ -148,7 +179,7 @@ export async function resolverWorkflow(order: Order): Promise<void> {
       }
     }
 
-    console.log("\n--- Step 2: Wait for Withdrawal Window to Open ---");
+    console.log("\n--- Step 3: Wait for Withdrawal Window to Open ---");
     const currentTime = Math.floor(Date.now() / 1000);
     const timeToWait = order.withdrawalStart - currentTime;
     
@@ -157,11 +188,11 @@ export async function resolverWorkflow(order: Order): Promise<void> {
       await new Promise(resolve => setTimeout(resolve, timeToWait * 1000));
     }
 
-    console.log("\n--- Step 3: Execute Cross-Chain Swap ---");
-
+    console.log("\n--- Step 4: Execute Cross-Chain Swap ---");
+    
     // Check escrow details before withdrawal
     console.log("Checking source escrow details...");
-    const srcEscrowContract = new ethers.Contract(order.srcEscrowAddress, escrowABI, srcProvider);
+    const srcEscrowContract = new ethers.Contract(srcEscrowAddress, escrowABI, srcProvider);
     const srcRecipient = await srcEscrowContract.recipient();
     const srcCreator = await srcEscrowContract.creator();
     const srcAmount = await srcEscrowContract.amount();
@@ -182,13 +213,20 @@ export async function resolverWorkflow(order: Order): Promise<void> {
     
     // Withdraw from source escrow (Sepolia) - resolver gets ETH (unwrapped from WETH)
     console.log("Withdrawing from source escrow on Sepolia...");
-    const srcWithdrawTx = await srcEscrowContract.connect(resolverSigner).withdraw(order.secret);
+    const srcWithdrawTx = await srcEscrowContract.connect(resolverSigner).withdraw(order.secret, {
+      gasLimit: 150000, // Reduced gas limit
+      maxFeePerGas: ethers.utils.parseUnits("15", "gwei"), // Reduced gas price
+      maxPriorityFeePerGas: ethers.utils.parseUnits("1", "gwei")
+    });
     const srcWithdrawReceipt = await srcWithdrawTx.wait();
     console.log("✅ Source escrow withdrawal transaction:", srcWithdrawReceipt.transactionHash);
-  
+    
     // Withdraw from destination escrow (BSC) - buyer gets BNB (unwrapped from WBNB)
     console.log("Withdrawing from destination escrow on BSC Testnet...");
-    const dstWithdrawTx = await dstEscrowContract.connect(dstSigner).withdraw(order.secret);
+    const dstWithdrawTx = await dstEscrowContract.connect(dstSigner).withdraw(order.secret, {
+      gasLimit: 150000, // Reduced gas limit
+      gasPrice: ethers.utils.parseUnits("2", "gwei") // Reduced gas price for BSC
+    });
     const dstWithdrawReceipt = await dstWithdrawTx.wait();
     console.log("✅ Destination escrow withdrawal transaction:", dstWithdrawReceipt.transactionHash);
 

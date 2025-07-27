@@ -15,8 +15,8 @@ const BUYER_PRIVATE_KEY = process.env.BUYER_PRIVATE_KEY || "0x380c56cf5607c879be
 const buyerSigner = new ethers.Wallet(BUYER_PRIVATE_KEY, srcProvider);
 
 // Contract addresses
-const SEPOLIA_FACTORY_ADDRESS = process.env.SEPOLIA_FACTORY_ADDRESS || "0x67654eD61484DC892b34937f971ba800a3eAE143";
-const BSC_TESTNET_FACTORY_ADDRESS = process.env.BSC_TESTNET_FACTORY_ADDRESS || "0xC0Ea9bA536c671391ACe880BAf3Ba8f6b40d1A7F";
+const SEPOLIA_FACTORY_ADDRESS = process.env.SEPOLIA_FACTORY_ADDRESS || "0xe3d0a25d1c9D28216F3b1BD975a33E3D9D0CDAe1";
+const BSC_TESTNET_FACTORY_ADDRESS = process.env.BSC_TESTNET_FACTORY_ADDRESS || "0x2fc7308a6D40c68fc47990eD29656fF7c8F6FBB2";
 
 // Token addresses
 const SEPOLIA_WETH = process.env.SEPOLIA_WETH || "0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9";
@@ -58,12 +58,6 @@ export interface Order {
 
 export const localOrders: { [orderId: string]: Order } = {};
 
-// Factory ABI for creating escrows
-const factoryABI = [
-  "function createSrcEscrow(bytes32 hashedSecret, address recipient, address buyer, uint256 tokenAmount, uint256 withdrawalStart, uint256 publicWithdrawalStart, uint256 cancellationStart, uint256 publicCancellationStart) external payable",
-  "function createDstEscrow(bytes32 hashedSecret, address recipient, uint256 tokenAmount, uint256 withdrawalStart, uint256 publicWithdrawalStart, uint256 cancellationStart) external payable"
-];
-
 // WETH ABI for wrapping and approvals
 const wethABI = [
   "function balanceOf(address owner) view returns (uint256)",
@@ -80,7 +74,7 @@ export function getAllOrders(): Order[] {
   return Object.values(localOrders);
 }
 
-export async function createOrder(): Promise<{ orderCreation: { orderId: string; status: string; message: string }; shareSecret: () => void; secret: string; srcEscrowAddress: string }> {
+export async function createOrder(): Promise<{ orderCreation: { orderId: string; status: string; message: string }; shareSecret: () => void; secret: string }> {
   try {
     console.log("=== BUYER: Creating Cross-Chain Swap Order ===");
     console.log("Buyer Address:", buyerSigner.address);
@@ -142,64 +136,31 @@ export async function createOrder(): Promise<{ orderCreation: { orderId: string;
 
     console.log("\n--- Step 2: Approve Factory to Spend WETH ---");
     
-    // Approve factory to spend WETH
-    const factoryContract = new ethers.Contract(SEPOLIA_FACTORY_ADDRESS, factoryABI, buyerSigner);
+    // Approve factory to spend WETH (resolver will call createSrcEscrow)
     const approvalTx = await wethContract.approve(SEPOLIA_FACTORY_ADDRESS, srcAmount);
     await approvalTx.wait();
     console.log("✅ Factory approved to spend WETH");
 
-    console.log("\n--- Step 3: Create Source Escrow ---");
-    
-    // Create source escrow (buyer calls this directly)
-    const createSrcEscrowTx = await factoryContract.createSrcEscrow(
-      hashedSecret,
-      process.env.RESOLVER_ADDRESS, // recipient is resolver
-      buyerSigner.address, // buyer is the buyer
-      srcAmount,
-      withdrawalStart,
-      publicWithdrawalStart,
-      cancellationStart,
-      publicCancellationStart,
-      { value: ethers.utils.parseEther("0.001") } // deposit amount
-    );
-    
-    const srcReceipt = await createSrcEscrowTx.wait();
-    console.log("✅ Source escrow creation transaction:", srcReceipt.transactionHash);
-    
-    // Extract escrow address from event
-    const srcEscrowCreatedEvent = srcReceipt.logs.find((log: any) => 
-      log.topics[0] === ethers.utils.id("SrcEscrowCreated(address,address,address,bytes32,uint256,uint256,uint256,uint256,uint256)")
-    );
-    
-    if (srcEscrowCreatedEvent) {
-      const srcEscrowAddress = ethers.utils.getAddress(srcEscrowCreatedEvent.data.slice(0, 66).slice(-40));
-      order.srcEscrowAddress = srcEscrowAddress;
-      console.log("✅ Source Escrow Address:", srcEscrowAddress);
-    } else {
-      console.log("⚠️ Could not extract source escrow address from event");
-    }
-
     console.log("\n=== Order Created Successfully ===");
     console.log("Order ID:", orderId);
-    console.log("Source Escrow:", order.srcEscrowAddress || "Not extracted");
     console.log("Time Windows:");
     console.log("  - Withdrawal Start:", new Date(withdrawalStart * 1000).toLocaleString());
     console.log("  - Public Withdrawal Start:", new Date(publicWithdrawalStart * 1000).toLocaleString());
     console.log("  - Cancellation Start:", new Date(cancellationStart * 1000).toLocaleString());
+    console.log("\n⚠️  NOTE: Resolver needs to call createSrcEscrow to create the source escrow");
 
     return {
       orderCreation: {
         orderId,
         status: "success",
-        message: "Order created successfully"
+        message: "Order created successfully - waiting for resolver to create source escrow"
       },
       shareSecret: () => {
         console.log("\n=== SHARING SECRET ===");
         console.log("Secret:", ethers.utils.hexlify(secret));
         console.log("Share this secret with the resolver to complete the swap");
       },
-      secret: ethers.utils.hexlify(secret),
-      srcEscrowAddress: order.srcEscrowAddress || ""
+      secret: ethers.utils.hexlify(secret)
     };
 
   } catch (error) {
@@ -211,8 +172,7 @@ export async function createOrder(): Promise<{ orderCreation: { orderId: string;
         message: error instanceof Error ? error.message : "Unknown error"
       },
       shareSecret: () => {},
-      secret: "",
-      srcEscrowAddress: ""
+      secret: ""
     };
   }
 }

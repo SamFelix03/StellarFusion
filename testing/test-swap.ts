@@ -12,11 +12,12 @@ async function main() {
     console.log("Buyer: 0x0994b358dC0a58Dd2bD3cc222ef8ab6F1eB7BFEb");
     console.log("Resolver: 0x2514844F312c02Ae3C9d4fEb40db4eC8830b6844");
     console.log("Swap: 0.01 ETH (Sepolia) ↔ 0.01 BNB (BSC Testnet)");
+    console.log("Gas Strategy: Reduced gas limits and prices for cost efficiency");
     console.log("==========================================\n");
 
-    // Step 1: Buyer creates order and source escrow
-    console.log("📋 STEP 1: Buyer Creating Order and Source Escrow");
-    console.log("------------------------------------------------");
+    // Step 1: Buyer creates order and approves WETH spending
+    console.log("📋 STEP 1: Buyer Creating Order and Approving WETH");
+    console.log("--------------------------------------------------");
     
     const buyerResult = await createOrder();
     
@@ -26,7 +27,6 @@ async function main() {
     
     console.log("✅ Order created successfully");
     console.log("Order ID:", buyerResult.orderCreation.orderId);
-    console.log("Source Escrow:", buyerResult.srcEscrowAddress);
     
     // Share the secret (in real scenario, this would be shared securely)
     buyerResult.shareSecret();
@@ -35,7 +35,7 @@ async function main() {
     console.log("\n⏳ Waiting for blockchain confirmation...");
     await new Promise(resolve => setTimeout(resolve, 5000));
     
-    // Step 3: Resolver executes the cross-chain swap
+    // Step 3: Resolver executes the cross-chain swap (creates both escrows)
     console.log("\n🔄 STEP 2: Resolver Executing Cross-Chain Swap");
     console.log("-----------------------------------------------");
     
@@ -55,6 +55,7 @@ async function main() {
     console.log("✅ Resolver received 0.01 ETH on Sepolia (native ETH)");
     console.log("✅ Both escrows have been withdrawn");
     console.log("✅ Tokens automatically unwrapped to native currency");
+    console.log("✅ Reduced gas costs used for cost efficiency");
     console.log("✅ Atomic swap conditions met");
     
     // Final verification
