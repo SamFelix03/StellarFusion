@@ -1,0 +1,70 @@
+{
+  "sepolia": {
+    "name": "Sepolia Testnet",
+    "chainId": 11155111,
+    "rpcUrl": "https://eth-sepolia.g.alchemy.com/v2/NMsHzNgJ7XUYtzNyFpEJ8yT4muQ_lkRF",
+    "nativeCurrency": {
+      "name": "Ethereum",
+      "symbol": "ETH",
+      "decimals": 18
+    },
+    "factoryAddress": "0xe3d0a25d1c9D28216F3b1BD975a33E3D9D0CDAe1",
+    "tokens": {
+      "ETH": {
+        "name": "Ethereum",
+        "symbol": "ETH",
+        "address": "0x0000000000000000000000000000000000000000",
+        "decimals": 18,
+        "isNative": true
+      },
+      "WETH": {
+        "name": "Wrapped Ethereum",
+        "symbol": "WETH",
+        "address": "0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9",
+        "decimals": 18,
+        "isNative": false
+      },
+      "USDC": {
+        "name": "USD Coin",
+        "symbol": "USDC",
+        "address": "0x94a9D9AC8a22534E3FaCa9F4e7F2E2cf85d5E4C8",
+        "decimals": 6,
+        "isNative": false
+      }
+    }
+  },
+  "bsc-testnet": {
+    "name": "BSC Testnet",
+    "chainId": 97,
+    "rpcUrl": "https://bnb-testnet.g.alchemy.com/v2/NMsHzNgJ7XUYtzNyFpEJ8yT4muQ_lkRF",
+    "nativeCurrency": {
+      "name": "Binance Coin",
+      "symbol": "BNB",
+      "decimals": 18
+    },
+    "factoryAddress": "0x2fc7308a6D40c68fc47990eD29656fF7c8F6FBB2",
+    "tokens": {
+      "BNB": {
+        "name": "Binance Coin",
+        "symbol": "BNB",
+        "address": "0x0000000000000000000000000000000000000000",
+        "decimals": 18,
+        "isNative": true
+      },
+      "WBNB": {
+        "name": "Wrapped BNB",
+        "symbol": "WBNB",
+        "address": "0xae13d989daC2f0dEbFf460aC112a837C89BAa7cd",
+        "decimals": 18,
+        "isNative": false
+      },
+      "USDT": {
+        "name": "Tether USD",
+        "symbol": "USDT",
+        "address": "0x337610d27c682E347C9cD60BD4b3b107C9d34dDd",
+        "decimals": 18,
+        "isNative": false
+      }
+    }
+  }
+} 
