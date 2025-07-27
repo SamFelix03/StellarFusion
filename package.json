@@ -1,0 +1,22 @@
+{
+  "name": "1inch-cross-chain-escrow",
+  "version": "1.0.0",
+  "description": "Cross-chain atomic swap using hash-locked escrows",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "ethers": "^5.7.2",
+    "dotenv": "^16.0.3"
+  },
+  "devDependencies": {
+    "@types/node": "^18.15.11",
+    "typescript": "^5.0.4"
+  },
+  "keywords": ["blockchain", "cross-chain", "escrow", "atomic-swap"],
+  "author": "",
+  "license": "MIT"
+} 
