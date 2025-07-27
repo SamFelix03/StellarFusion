@@ -73,7 +73,7 @@ class DynamicSwapInterface {
 
   private loadChainConfigs() {
     try {
-      const configPath = path.join(__dirname, "../config/chains.json");
+      const configPath = path.join(process.cwd(), "config/chains.json");
       const configData = fs.readFileSync(configPath, "utf8");
       this.chains = JSON.parse(configData);
     } catch (error) {
