@@ -200,8 +200,8 @@ contract SourceEscrow is ReentrancyGuard {
             require(msg.sender == recipient, "Only recipient in private window");
         }
         
-        // Verify secret matches the hash
-        require(keccak256(secret) == hashedSecret, "Invalid secret");
+        // Use SHA256 instead of keccak256 for Stellar compatibility
+        require(sha256(secret) == hashedSecret, "Invalid secret");
 
         fundsWithdrawn = true;
 
@@ -344,8 +344,8 @@ contract DestinationEscrow is ReentrancyGuard {
             require(msg.sender == recipient || msg.sender == creator, "Only recipient or creator in private window");
         }
         
-        // Verify secret matches the hash
-        require(keccak256(secret) == hashedSecret, "Invalid secret");
+        // Use SHA256 instead of keccak256 for Stellar compatibility
+        require(sha256(secret) == hashedSecret, "Invalid secret");
 
         fundsWithdrawn = true;
 

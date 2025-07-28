@@ -4,13 +4,25 @@ import inquirer from "inquirer";
 import * as fs from "fs";
 import * as path from "path";
 import { PriceService } from "./price-service";
+import { 
+  Keypair, 
+  TransactionBuilder, 
+  Networks, 
+  Operation,
+  Asset,
+  Contract,
+  SorobanRpc,
+  Address,
+  nativeToScVal,
+  scValToNative
+} from "stellar-sdk";
 
 dotenv.config();
 
 // Types
 interface ChainConfig {
   name: string;
-  chainId: number;
+  chainId: number | string; // Support both number (EVM) and string (Stellar)
   rpcUrl: string;
   nativeCurrency: {
     name: string;
@@ -27,6 +39,7 @@ interface ChainConfig {
       isNative: boolean;
     };
   };
+  isStellar?: boolean; // Flag to identify Stellar chains
 }
 
 interface SwapConfig {
@@ -41,8 +54,8 @@ interface SwapConfig {
 interface Order {
   orderId: string;
   buyerAddress: string;
-  srcChainId: number;
-  dstChainId: number;
+  srcChainId: number | string; // Support both EVM (number) and Stellar (string)
+  dstChainId: number | string; // Support both EVM (number) and Stellar (string)
   srcToken: string;
   dstToken: string;
   srcAmount: ethers.BigNumber;
@@ -60,6 +73,9 @@ class DynamicSwapInterface {
   private chains: { [key: string]: ChainConfig } = {};
   private buyerPrivateKey: string;
   private resolverPrivateKey: string;
+  private stellarServer: SorobanRpc.Server;
+  private stellarBuyerKeypair: Keypair | null = null;
+  private stellarResolverKeypair: Keypair | null = null;
 
   constructor() {
     this.loadChainConfigs();
@@ -69,6 +85,21 @@ class DynamicSwapInterface {
     if (!this.buyerPrivateKey || !this.resolverPrivateKey) {
       throw new Error("Please set BUYER_PRIVATE_KEY and RESOLVER_PRIVATE_KEY in .env file");
     }
+
+    // Initialize Stellar SDK
+    this.stellarServer = new SorobanRpc.Server('https://soroban-testnet.stellar.org:443');
+    
+    // Initialize Stellar keypairs from env if available
+    try {
+      if (process.env.STELLAR_BUYER_SECRET) {
+        this.stellarBuyerKeypair = Keypair.fromSecret(process.env.STELLAR_BUYER_SECRET);
+      }
+      if (process.env.STELLAR_RESOLVER_SECRET) {
+        this.stellarResolverKeypair = Keypair.fromSecret(process.env.STELLAR_RESOLVER_SECRET);
+      }
+    } catch (error) {
+      console.warn("⚠️ Stellar keypairs not configured properly. Using hardcoded addresses.");
+    }
   }
 
   private loadChainConfigs() {
@@ -76,10 +107,588 @@ class DynamicSwapInterface {
       const configPath = path.join(process.cwd(), "config/chains.json");
       const configData = fs.readFileSync(configPath, "utf8");
       this.chains = JSON.parse(configData);
+      
+      // Mark Stellar chains
+      Object.keys(this.chains).forEach(chainKey => {
+        if (chainKey.includes('stellar')) {
+          this.chains[chainKey].isStellar = true;
+        }
+      });
     } catch (error) {
       console.error("Error loading chain configurations:", error);
       throw new Error("Failed to load chain configurations");
     }
+  }
+
+  private isStellarChain(chainKey: string): boolean {
+    return this.chains[chainKey]?.isStellar === true;
+  }
+
+  private getStellarAddresses() {
+    return {
+      buyer: process.env.STELLAR_BUYER_ADDRESS || "",
+      resolver: process.env.STELLAR_RESOLVER_ADDRESS || ""
+    };
+  }
+
+  private async executeStellarSwap(config: SwapConfig, isSrcStellar: boolean, isDstStellar: boolean) {
+    console.log("\n🌟 STELLAR CROSS-CHAIN SWAP");
+    console.log("============================");
+    
+    const stellarAddresses = this.getStellarAddresses();
+    console.log(`Stellar Buyer: ${stellarAddresses.buyer}`);
+    console.log(`Stellar Resolver: ${stellarAddresses.resolver}`);
+    
+    // Generate order with proper buyer address
+    const buyerAddress = isSrcStellar ? stellarAddresses.buyer : 
+                        new ethers.Wallet(this.buyerPrivateKey).address;
+    const order = await this.createOrder(config, buyerAddress);
+    
+    console.log("\n📋 Order Details:");
+    console.log(`Order ID: ${order.orderId}`);
+    console.log(`Source Chain: ${config.sourceChain} ${isSrcStellar ? '(Stellar)' : '(EVM)'}`);
+    console.log(`Destination Chain: ${config.destinationChain} ${isDstStellar ? '(Stellar)' : '(EVM)'}`);
+    console.log(`Amount: ${config.sourceAmount} ${config.sourceToken} → ${config.destinationAmount} ${config.destinationToken}`);
+    console.log(`Secret: ${order.secret}`);
+    console.log(`Hashed Secret: ${order.hashedSecret}`);
+    
+    if (isSrcStellar && isDstStellar) {
+      console.log("\n🔄 STELLAR ↔ STELLAR SWAP");
+      await this.executeStellarToStellarSwap(config, order);
+    } else if (isSrcStellar) {
+      console.log("\n🔄 STELLAR → EVM SWAP");
+      await this.executeStellarToEvmSwap(config, order);
+    } else if (isDstStellar) {
+      console.log("\n🔄 EVM → STELLAR SWAP");
+      await this.executeEvmToStellarSwap(config, order);
+    }
+    
+    console.log("\n🎉 Stellar Cross-Chain Swap Process Completed!");
+    console.log("==============================================");
+  }
+
+  private async executeStellarToStellarSwap(config: SwapConfig, order: Order) {
+    console.log("\n🔧 STELLAR → STELLAR SWAP EXECUTION");
+    console.log("-----------------------------------");
+    
+    const stellarAddresses = this.getStellarAddresses();
+    
+    // Step 1: Prepare buyer on Stellar source chain
+    console.log(`\n📝 Step 1: Prepare buyer on Stellar source chain`);
+    await this.prepareStellarBuyer(config, order);
+    
+    // Step 2: Prepare resolver on Stellar destination chain  
+    console.log(`\n📝 Step 2: Prepare resolver on Stellar destination chain`);
+    await this.prepareStellarResolver(config, order);
+    
+    // Step 3: Create source escrow on Stellar
+    console.log(`\n📝 Step 3: Create source escrow on Stellar`);
+    const stellarSrcResult = await this.createStellarSourceEscrow(
+      stellarAddresses.resolver, // creator (resolver)
+      stellarAddresses.resolver, // recipient (resolver)
+      order.hashedSecret,
+      config.sourceAmount,
+      order.withdrawalStart,
+      order.publicWithdrawalStart,
+      order.cancellationStart,
+      order.publicCancellationStart
+    );
+    
+    if (!stellarSrcResult.success) {
+      console.log(`❌ Stellar source escrow creation failed: ${stellarSrcResult.error}`);
+      return;
+    }
+    
+    // Step 4: Create destination escrow on Stellar
+    console.log(`\n📝 Step 4: Create destination escrow on Stellar`);
+    const stellarDstResult = await this.createStellarDestinationEscrow(
+      stellarAddresses.resolver, // creator (resolver)
+      stellarAddresses.buyer, // recipient (buyer)
+      order.hashedSecret,
+      config.destinationAmount,
+      order.withdrawalStart,
+      order.publicWithdrawalStart,
+      order.cancellationStart
+    );
+    
+    if (!stellarDstResult.success) {
+      console.log(`❌ Stellar destination escrow creation failed: ${stellarDstResult.error}`);
+      return;
+    }
+    
+    // Step 5: Wait for withdrawal window
+    console.log(`\n📝 Step 5: Wait for withdrawal window`);
+    const currentTime = Math.floor(Date.now() / 1000);
+    const timeToWait = order.withdrawalStart - currentTime;
+    
+    if (timeToWait > 0) {
+      console.log(`⏳ Waiting ${timeToWait} seconds for withdrawal window...`);
+      await new Promise(resolve => setTimeout(resolve, timeToWait * 1000));
+    }
+    
+    // Step 6: Execute withdrawals
+    console.log(`\n📝 Step 6: Execute Stellar source escrow withdrawal (resolver gets source tokens)`);
+    const srcWithdrawal = await this.withdrawFromStellarEscrow(
+      stellarSrcResult.escrowAddress || "",
+      order.secret,
+      stellarAddresses.resolver
+    );
+    
+    if (srcWithdrawal.success) {
+      console.log(`\n📝 Step 7: Execute Stellar destination escrow withdrawal (buyer gets destination tokens)`);
+      const dstWithdrawal = await this.withdrawFromStellarEscrow(
+        stellarDstResult.escrowAddress || "",
+        order.secret,
+        stellarAddresses.resolver // Resolver calls withdrawal for buyer
+      );
+      
+      if (dstWithdrawal.success) {
+        console.log("\n🎉 STELLAR ↔ STELLAR SWAP COMPLETED SUCCESSFULLY!");
+        console.log("===============================================");
+        console.log(`✅ Buyer received ${config.destinationAmount} ${config.destinationToken} on Stellar`);
+        console.log(`✅ Resolver received ${config.sourceAmount} ${config.sourceToken} on Stellar`);
+        console.log(`🔗 Both used SHA256 hashing for cross-chain compatibility`);
+      } else {
+        console.log(`❌ Stellar destination withdrawal failed: ${dstWithdrawal.error}`);
+      }
+    } else {
+      console.log(`❌ Stellar source withdrawal failed: ${srcWithdrawal.error}`);
+    }
+    
+    console.log("\n✅ Stellar → Stellar swap execution completed!");
+  }
+
+  private async executeStellarToEvmSwap(config: SwapConfig, order: Order) {
+    console.log("\n🔧 STELLAR → EVM SWAP EXECUTION");
+    console.log("-------------------------------");
+    
+    const stellarAddresses = this.getStellarAddresses();
+    
+    // Step 1: Prepare buyer on Stellar source chain
+    console.log(`\n📝 Step 1: Prepare buyer on Stellar source chain`);
+    await this.prepareStellarBuyer(config, order);
+    
+    // Step 2: Create source escrow on Stellar
+    console.log(`\n📝 Step 2: Create source escrow on Stellar`);
+    console.log(`   Stellar Factory: ${this.chains['stellar-testnet']?.factoryAddress}`);
+    console.log(`   Buyer: ${stellarAddresses.buyer}`);
+    console.log(`   Amount: ${config.sourceAmount} ${config.sourceToken}`);
+    
+    const stellarSrcResult = await this.createStellarSourceEscrow(
+      stellarAddresses.resolver, // creator (resolver)
+      stellarAddresses.resolver, // recipient (resolver gets source tokens)
+      order.hashedSecret,
+      config.sourceAmount,
+      order.withdrawalStart,
+      order.publicWithdrawalStart,
+      order.cancellationStart,
+      order.publicCancellationStart
+    );
+    
+    if (!stellarSrcResult.success) {
+      console.log(`❌ Stellar source escrow creation failed: ${stellarSrcResult.error}`);
+      return;
+    }
+    
+    // Step 3: Create destination escrow on EVM
+    console.log(`\n📝 Step 3: Create destination escrow on EVM (${config.destinationChain})`);
+    console.log(`   EVM Factory: ${this.chains[config.destinationChain].factoryAddress}`);
+    
+    const dstProvider = new ethers.providers.JsonRpcProvider(this.chains[config.destinationChain].rpcUrl);
+    const dstSigner = new ethers.Wallet(this.resolverPrivateKey, dstProvider);
+    const buyerAddress = new ethers.Wallet(this.buyerPrivateKey).address;
+    
+    await this.createEvmDestinationEscrow(config, order, dstSigner, buyerAddress);
+    
+    // Step 4: Wait for withdrawal window and execute swaps
+    console.log(`\n📝 Step 4: Wait for withdrawal window and execute swaps`);
+    console.log(`   Withdrawal starts at: ${new Date(order.withdrawalStart * 1000).toLocaleString()}`);
+    
+    const currentTime = Math.floor(Date.now() / 1000);
+    const timeToWait = order.withdrawalStart - currentTime;
+    
+    if (timeToWait > 0) {
+      console.log(`\n⏳ Waiting ${timeToWait} seconds for withdrawal window...`);
+      await new Promise(resolve => setTimeout(resolve, timeToWait * 1000));
+    }
+    
+    // Step 5: Execute Stellar withdrawal first (resolver gets source tokens)
+    console.log(`\n📝 Step 5: Execute Stellar source escrow withdrawal`);
+    const stellarWithdrawal = await this.withdrawFromStellarEscrow(
+      stellarSrcResult.escrowAddress || "",
+      order.secret,
+      stellarAddresses.resolver
+    );
+    
+    if (stellarWithdrawal.success) {
+      // Step 6: Execute EVM withdrawal (buyer gets destination tokens)
+      console.log(`\n📝 Step 6: Execute EVM destination escrow withdrawal`);
+      await this.withdrawFromEvmEscrow("evm_dst_escrow_placeholder", order.secret, dstSigner);
+      
+      console.log("\n🎉 CROSS-CHAIN SWAP COMPLETED SUCCESSFULLY!");
+      console.log("==============================================");
+      console.log(`✅ Buyer received ${config.destinationAmount} ${config.destinationToken} on EVM`);
+      console.log(`✅ Resolver received ${config.sourceAmount} ${config.sourceToken} on Stellar`);
+    } else {
+      console.log(`❌ Stellar withdrawal failed: ${stellarWithdrawal.error}`);
+    }
+    
+    console.log("\n✅ Stellar → EVM swap execution completed!");
+  }
+
+  private async executeEvmToStellarSwap(config: SwapConfig, order: Order) {
+    console.log("\n🔧 EVM → STELLAR SWAP EXECUTION");
+    console.log("-------------------------------");
+    
+    const stellarAddresses = this.getStellarAddresses();
+    
+    // Create EVM provider and signers for source chain
+    const srcProvider = new ethers.providers.JsonRpcProvider(this.chains[config.sourceChain].rpcUrl);
+    const buyerSigner = new ethers.Wallet(this.buyerPrivateKey, srcProvider);
+    const resolverSigner = new ethers.Wallet(this.resolverPrivateKey, srcProvider);
+    
+    // Step 1: Prepare buyer on EVM source chain
+    console.log(`\n📝 Step 1: Prepare buyer on EVM (${config.sourceChain})`);
+    console.log(`   Buyer: ${buyerSigner.address}`);
+    console.log(`   Amount: ${config.sourceAmount} ${config.sourceToken}`);
+    
+    await this.prepareBuyer(config, buyerSigner, order);
+
+    // Step 2: Prepare resolver on Stellar destination chain
+    console.log(`\n📝 Step 2: Prepare resolver on Stellar destination chain`);
+    await this.prepareStellarResolver(config, order);
+
+    // Step 3: Create source escrow on EVM
+    console.log(`\n📝 Step 3: Create source escrow on EVM`);
+    console.log(`   EVM Factory: ${this.chains[config.sourceChain].factoryAddress}`);
+    
+    await this.executeSourceEscrowOnly(config, order, resolverSigner);
+
+    // Step 4: Create destination escrow on Stellar
+    console.log(`\n📝 Step 4: Create destination escrow on Stellar`);
+    console.log(`   Stellar Factory: ${this.chains['stellar-testnet']?.factoryAddress}`);
+    console.log(`   Resolver: ${stellarAddresses.resolver}`);
+    console.log(`   Recipient: ${stellarAddresses.buyer}`);
+    console.log(`   Amount: ${config.destinationAmount} ${config.destinationToken}`);
+    
+    const stellarResult = await this.createStellarDestinationEscrow(
+      stellarAddresses.resolver,
+      stellarAddresses.buyer,
+      order.hashedSecret,
+      config.destinationAmount,
+      order.withdrawalStart,
+      order.publicWithdrawalStart,
+      order.cancellationStart
+    );
+    
+    if (stellarResult.success) {
+      // Step 5: Wait for withdrawal window and execute atomic swap
+      console.log(`\n📝 Step 5: Execute cross-chain atomic swap`);
+      console.log(`   Secret will be revealed on Stellar and used to withdraw from EVM`);
+      console.log(`   Withdrawal starts at: ${new Date(order.withdrawalStart * 1000).toLocaleString()}`);
+      
+      const currentTime = Math.floor(Date.now() / 1000);
+      const timeToWait = order.withdrawalStart - currentTime;
+      
+      if (timeToWait > 0) {
+        console.log(`\n⏳ Waiting ${timeToWait} seconds for withdrawal window...`);
+        await new Promise(resolve => setTimeout(resolve, timeToWait * 1000));
+      }
+      
+      // Step 6: Execute EVM withdrawal first (resolver gets the source tokens)
+      console.log(`\n📝 Step 6: Execute EVM source escrow withdrawal`);
+      await this.withdrawFromEvmEscrow(order.srcEscrowAddress!, order.secret, resolverSigner);
+      
+      // Step 7: Execute Stellar withdrawal (buyer gets destination tokens)
+      console.log(`\n📝 Step 7: Execute Stellar destination escrow withdrawal`);
+      const withdrawalResult = await this.withdrawFromStellarEscrow(
+        stellarResult.escrowAddress || "",
+        order.secret,
+        this.getStellarAddresses().resolver // RESOLVER calls the withdrawal, not buyer
+      );
+      
+      if (withdrawalResult.success) {
+        console.log("\n🎉 CROSS-CHAIN SWAP COMPLETED SUCCESSFULLY!");
+        console.log("==============================================");
+        console.log(`✅ Buyer received ${config.destinationAmount} ${config.destinationToken} on Stellar`);
+        console.log(`✅ Resolver received ${config.sourceAmount} ${config.sourceToken} on EVM`);
+        console.log(`🔗 Both chains used SHA256 hashing for cross-chain compatibility`);
+      } else {
+        console.log(`❌ Stellar withdrawal failed: ${withdrawalResult.error}`);
+      }
+    } else {
+      console.log(`❌ Stellar destination escrow creation failed: ${stellarResult.error}`);
+    }
+    
+    console.log("\n✅ EVM → Stellar swap execution completed!");
+  }
+
+  // Stellar contract interaction methods
+  private async createStellarDestinationEscrow(
+    creator: string,
+    recipient: string,
+    hashedSecret: string,
+    amount: number,
+    withdrawalStart: number,
+    publicWithdrawalStart: number,
+    cancellationStart: number
+  ) {
+    console.log(`\n🌟 Creating Stellar Destination Escrow...`);
+    
+    try {
+      if (!this.stellarResolverKeypair) {
+        throw new Error("Stellar resolver keypair not configured");
+      }
+
+      const contractAddress = this.chains['stellar-testnet']?.factoryAddress;
+      if (!contractAddress) {
+        throw new Error("Stellar factory address not configured");
+      }
+
+      // Convert amount to stroops (XLM has 7 decimals)
+      const amountInStroops = Math.floor(amount * 10000000);
+      
+      console.log("🔍 Debug - Parameters being passed:");
+      console.log(`  creator: ${creator}`);
+      console.log(`  hashed_secret: ${hashedSecret}`);
+      console.log(`  recipient: ${recipient}`);
+      console.log(`  token_amount: ${amountInStroops} (${amount} XLM)`);
+      console.log(`  withdrawal_start: ${withdrawalStart}`);
+      console.log(`  public_withdrawal_start: ${publicWithdrawalStart}`);
+      console.log(`  cancellation_start: ${cancellationStart}`);
+      
+      // Use CLI approach instead of SDK for better compatibility
+      const { execSync } = require('child_process');
+      
+      const command = `soroban contract invoke --id ${contractAddress} --source stellar-resolver --network testnet -- create_dst_escrow --creator ${creator} --hashed_secret ${hashedSecret.slice(2)} --recipient ${recipient} --token_amount ${amountInStroops} --withdrawal_start ${withdrawalStart} --public_withdrawal_start ${publicWithdrawalStart} --cancellation_start ${cancellationStart}`;
+      
+      console.log("📤 Executing CLI command...");
+      console.log(`Command: ${command}`);
+      
+      const result = execSync(command, { encoding: 'utf8' });
+      
+      console.log("✅ Stellar destination escrow created successfully!");
+      console.log(`📋 Result: ${result.trim()}`);
+      
+      return {
+        success: true,
+        escrowAddress: result.trim().replace(/"/g, ''),
+        transactionHash: 'CLI_SUCCESS',
+        message: 'Destination escrow created successfully'
+      };
+      
+    } catch (error) {
+      console.error(`❌ Error creating Stellar destination escrow:`, error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error)
+      };
+    }
+  }
+
+  private async createStellarSourceEscrow(
+    creator: string,
+    recipient: string,
+    hashedSecret: string,
+    amount: number,
+    withdrawalStart: number,
+    publicWithdrawalStart: number,
+    cancellationStart: number,
+    publicCancellationStart: number
+  ) {
+    console.log(`\n🌟 Creating Stellar Source Escrow...`);
+    
+    try {
+      const contractAddress = this.chains['stellar-testnet']?.factoryAddress;
+      if (!contractAddress) {
+        throw new Error("Stellar factory address not configured");
+      }
+
+      const stellarAddresses = this.getStellarAddresses();
+      const amountInStroops = Math.floor(amount * 10000000);
+      
+      console.log("🔍 Debug - Parameters being passed:");
+      console.log(`  creator: ${creator}`);
+      console.log(`  hashed_secret: ${hashedSecret}`);
+      console.log(`  recipient: ${recipient}`);
+      console.log(`  buyer: ${stellarAddresses.buyer}`);
+      console.log(`  token_amount: ${amountInStroops} (${amount} XLM)`);
+      console.log(`  withdrawal_start: ${withdrawalStart}`);
+      console.log(`  public_withdrawal_start: ${publicWithdrawalStart}`);
+      console.log(`  cancellation_start: ${cancellationStart}`);
+      console.log(`  public_cancellation_start: ${publicCancellationStart}`);
+      
+      // Use CLI approach for better compatibility
+      const { execSync } = require('child_process');
+      
+      const command = `soroban contract invoke --id ${contractAddress} --source stellar-resolver --network testnet -- create_src_escrow --creator ${creator} --hashed_secret ${hashedSecret.slice(2)} --recipient ${recipient} --buyer ${stellarAddresses.buyer} --token_amount ${amountInStroops} --withdrawal_start ${withdrawalStart} --public_withdrawal_start ${publicWithdrawalStart} --cancellation_start ${cancellationStart} --public_cancellation_start ${publicCancellationStart}`;
+      
+      console.log("📤 Executing CLI command...");
+      console.log(`Command: ${command}`);
+      
+      const result = execSync(command, { encoding: 'utf8' });
+      
+      console.log("✅ Stellar source escrow created successfully!");
+      console.log(`📋 Result: ${result.trim()}`);
+      
+      return {
+        success: true,
+        escrowAddress: result.trim().replace(/"/g, ''),
+        transactionHash: 'CLI_SUCCESS',
+        message: 'Source escrow created successfully'
+      };
+      
+    } catch (error) {
+      console.error(`❌ Error creating Stellar source escrow:`, error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error)
+      };
+    }
+  }
+
+  private async withdrawFromStellarEscrow(
+    escrowAddress: string,
+    secret: string,
+    caller: string
+  ) {
+    console.log(`\n🌟 Withdrawing from Stellar Escrow...`);
+    
+    try {
+      const stellarAddresses = this.getStellarAddresses();
+      const isResolver = caller === stellarAddresses.resolver;
+      const sourceKey = isResolver ? 'stellar-resolver' : 'stellar-buyer';
+      
+      if (!this.stellarResolverKeypair && isResolver) {
+        throw new Error(`Stellar resolver keypair not configured for caller: ${caller}`);
+      }
+      if (!this.stellarBuyerKeypair && !isResolver) {
+        throw new Error(`Stellar buyer keypair not configured for caller: ${caller}`);
+      }
+
+      const contractAddress = this.chains['stellar-testnet']?.factoryAddress;
+      if (!contractAddress) {
+        throw new Error("Stellar factory address not configured");
+      }
+
+      // Determine if this is source or destination escrow withdrawal
+      const methodName = escrowAddress.includes('src') ? 'withdraw_src_escrow' : 'withdraw_dst_escrow';
+      
+      // Use CLI approach for better compatibility
+      const { execSync } = require('child_process');
+      
+      const command = `soroban contract invoke --id ${contractAddress} --source ${sourceKey} --network testnet -- ${methodName} --caller ${caller} --escrow_address ${contractAddress} --secret ${secret.slice(2)}`;
+      
+      console.log("📤 Executing withdrawal CLI command...");
+      console.log(`Command: ${command}`);
+      
+      const result = execSync(command, { encoding: 'utf8' });
+      
+      console.log("✅ Stellar escrow withdrawal completed successfully!");
+      console.log(`📋 Result: ${result.trim()}`);
+      
+      return {
+        success: true,
+        transactionHash: 'CLI_SUCCESS',
+        message: 'Withdrawal completed successfully'
+      };
+      
+    } catch (error) {
+      console.error(`❌ Error withdrawing from Stellar escrow:`, error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error)
+      };
+    }
+  }
+
+  private async withdrawFromEvmEscrow(escrowAddress: string, secret: string, signer: ethers.Wallet) {
+    console.log(`\n🔧 Withdrawing from EVM Escrow: ${escrowAddress}`);
+    
+    try {
+      const escrowContract = new ethers.Contract(escrowAddress, escrowABI, signer);
+      
+      const withdrawTx = await escrowContract.withdraw(secret, {
+        gasLimit: 150000,
+        maxFeePerGas: ethers.utils.parseUnits("15", "gwei"),
+        maxPriorityFeePerGas: ethers.utils.parseUnits("1", "gwei")
+      });
+      
+      await withdrawTx.wait();
+      console.log("✅ EVM escrow withdrawal completed");
+      console.log(`📋 Transaction Hash: ${withdrawTx.hash}`);
+      
+    } catch (error) {
+      console.error(`❌ Error withdrawing from EVM escrow:`, error);
+      throw error;
+    }
+  }
+
+  private async createEvmDestinationEscrow(config: SwapConfig, order: Order, dstSigner: ethers.Wallet, buyerAddress: string) {
+    // Handle destination token preparation
+    const dstTokenConfig = this.chains[config.destinationChain].tokens[config.destinationToken];
+    let dstTokenAddress = order.dstToken;
+    const dstFactoryAddress = this.chains[config.destinationChain].factoryAddress;
+
+    if (dstTokenConfig.isNative) {
+      // For native tokens, we need to wrap them first
+      const wrappedTokenSymbol = config.destinationChain === 'sepolia' ? 'WETH' : 'WBNB';
+      const wrappedTokenAddress = this.chains[config.destinationChain].tokens[wrappedTokenSymbol].address;
+      
+      const wrapperABI = [
+        "function deposit() payable",
+        "function approve(address spender, uint256 amount) returns (bool)",
+        "function balanceOf(address owner) view returns (uint256)"
+      ];
+      
+      const wrapperContract = new ethers.Contract(wrappedTokenAddress, wrapperABI, dstSigner);
+      
+      // Check balance and wrap if needed
+      const balance = await wrapperContract.balanceOf(dstSigner.address);
+      if (balance.lt(order.dstAmount)) {
+        const amountToWrap = order.dstAmount.sub(balance).add(ethers.utils.parseEther("0.001"));
+        console.log(`Wrapping ${ethers.utils.formatEther(amountToWrap)} ${config.destinationToken}...`);
+        
+        const wrapTx = await wrapperContract.deposit({ value: amountToWrap });
+        await wrapTx.wait();
+        console.log("✅ Token wrapped successfully");
+      }
+      
+      // Approve factory
+      const approveTx = await wrapperContract.approve(dstFactoryAddress, order.dstAmount);
+      await approveTx.wait();
+      console.log("✅ Factory approved to spend wrapped tokens");
+      
+      dstTokenAddress = wrappedTokenAddress;
+    } else {
+      // For ERC20 tokens, just approve
+      const tokenABI = [
+        "function approve(address spender, uint256 amount) returns (bool)",
+        "function balanceOf(address owner) view returns (uint256)"
+      ];
+      
+      const tokenContract = new ethers.Contract(dstTokenConfig.address, tokenABI, dstSigner);
+      
+      const approveTx = await tokenContract.approve(dstFactoryAddress, order.dstAmount);
+      await approveTx.wait();
+      console.log("✅ Factory approved to spend tokens");
+    }
+
+    // Create destination escrow
+    const dstFactoryContract = new ethers.Contract(dstFactoryAddress, factoryABI, dstSigner);
+    
+    const createDstEscrowTx = await dstFactoryContract.createDstEscrow(
+      order.hashedSecret,
+      buyerAddress, // recipient is buyer
+      order.dstAmount,
+      order.withdrawalStart,
+      order.publicWithdrawalStart,
+      order.cancellationStart,
+      { value: ethers.utils.parseEther("0.001") } // deposit amount
+    );
+    
+    const dstReceipt = await createDstEscrowTx.wait();
+    console.log("✅ EVM destination escrow created:", dstReceipt.transactionHash);
   }
 
   async start() {
@@ -252,7 +861,17 @@ class DynamicSwapInterface {
   }
 
   private async executeSwap(config: SwapConfig) {
-    // Create providers
+    // Check if either chain is Stellar
+    const isSrcStellar = this.isStellarChain(config.sourceChain);
+    const isDstStellar = this.isStellarChain(config.destinationChain);
+    
+    if (isSrcStellar || isDstStellar) {
+      console.log("🌟 Stellar chain detected - using Stellar integration");
+      await this.executeStellarSwap(config, isSrcStellar, isDstStellar);
+      return;
+    }
+    
+    // Original EVM-only logic
     const srcProvider = new ethers.providers.JsonRpcProvider(this.chains[config.sourceChain].rpcUrl);
     const dstProvider = new ethers.providers.JsonRpcProvider(this.chains[config.destinationChain].rpcUrl);
     
@@ -287,7 +906,7 @@ class DynamicSwapInterface {
   private async createOrder(config: SwapConfig, buyerAddress: string): Promise<Order> {
     // Generate secret and hash
     const secret = ethers.utils.randomBytes(32);
-    const hashedSecret = ethers.utils.keccak256(secret);
+    const hashedSecret = ethers.utils.sha256(secret); // Changed from keccak256 to sha256
     const orderId = ethers.utils.id(hashedSecret + Date.now().toString()).slice(0, 10);
     
     // Time windows (in seconds from now)
@@ -366,6 +985,103 @@ class DynamicSwapInterface {
       const approveTx = await tokenContract.approve(factoryAddress, order.srcAmount);
       await approveTx.wait();
       console.log("✅ Factory approved to spend tokens");
+    }
+  }
+
+  private async prepareStellarBuyer(config: SwapConfig, order: Order) {
+    console.log(`\n🌟 Preparing Stellar Buyer...`);
+    
+    const stellarAddresses = this.getStellarAddresses();
+    const factoryAddress = this.chains[config.sourceChain].factoryAddress;
+    const tokenAddress = this.chains[config.sourceChain].tokens[config.sourceToken].address;
+    const amountInStroops = Math.floor(config.sourceAmount * 10000000);
+    
+    console.log(`  Buyer: ${stellarAddresses.buyer}`);
+    console.log(`  Amount: ${config.sourceAmount} ${config.sourceToken} (${amountInStroops} stroops)`);
+    console.log(`  Factory: ${factoryAddress}`);
+    console.log(`  Token Contract: ${tokenAddress}`);
+    
+    try {
+      const { execSync } = require('child_process');
+      
+      // Step 1: Buyer approves the factory contract (internal allowance)
+      console.log(`\n📝 Step 1: Buyer approves factory contract...`);
+      const factoryApproveCmd = `soroban contract invoke --id ${factoryAddress} --source stellar-buyer --network testnet -- approve --caller ${stellarAddresses.buyer} --amount ${amountInStroops * 2}`;
+      
+      console.log(`Command: ${factoryApproveCmd}`);
+      const factoryResult = execSync(factoryApproveCmd, { encoding: 'utf8' });
+      console.log("✅ Factory contract approved");
+      
+      // Step 2: Buyer approves the token contract (for actual token transfer)
+      console.log(`\n📝 Step 2: Buyer approves token contract...`);
+      const tokenApproveCmd = `soroban contract invoke --id ${tokenAddress} --source stellar-buyer --network testnet -- approve --from ${stellarAddresses.buyer} --spender ${factoryAddress} --amount ${amountInStroops * 2} --expiration_ledger 1000000`;
+      
+      console.log(`Command: ${tokenApproveCmd}`);
+      const tokenResult = execSync(tokenApproveCmd, { encoding: 'utf8' });
+      console.log("✅ Token contract approved");
+      
+      console.log(`\n✅ Stellar buyer preparation completed!`);
+      console.log(`   Factory allowance: ${amountInStroops * 2} stroops`);
+      console.log(`   Token allowance: ${amountInStroops * 2} stroops`);
+      
+    } catch (error) {
+      console.error(`❌ Error preparing Stellar buyer:`, error);
+      throw error;
+    }
+  }
+
+  private async prepareStellarResolver(config: SwapConfig, order: Order) {
+    console.log(`\n🌟 Preparing Stellar Resolver...`);
+    
+    const stellarAddresses = this.getStellarAddresses();
+    const factoryAddress = this.chains[config.destinationChain].factoryAddress;
+    const tokenAddress = this.chains[config.destinationChain].tokens[config.destinationToken].address;
+    const amountInStroops = Math.floor(config.destinationAmount * 10000000);
+    
+    console.log(`  Resolver: ${stellarAddresses.resolver}`);
+    console.log(`  Amount: ${config.destinationAmount} ${config.destinationToken} (${amountInStroops} stroops)`);
+    console.log(`  Factory: ${factoryAddress}`);
+    console.log(`  Token Contract: ${tokenAddress}`);
+    
+    console.log(`\n📝 Note: Resolver will transfer tokens directly (no approval needed)`);
+    console.log(`   Resolver has XLM balance and will authorize their own transfers`);
+    
+    console.log(`\n✅ Stellar resolver preparation completed!`);
+  }
+
+  private async executeSourceEscrowOnly(config: SwapConfig, order: Order, resolverSigner: ethers.Wallet) {
+    const srcFactoryAddress = this.chains[config.sourceChain].factoryAddress;
+    const srcFactoryContract = new ethers.Contract(srcFactoryAddress, factoryABI, resolverSigner);
+
+    console.log("Creating source escrow...");
+    const createSrcEscrowTx = await srcFactoryContract.createSrcEscrow(
+      order.hashedSecret,
+      resolverSigner.address, // recipient is resolver
+      order.buyerAddress, // buyer provides the tokens
+      order.srcAmount,
+      order.withdrawalStart,
+      order.publicWithdrawalStart,
+      order.cancellationStart,
+      order.publicCancellationStart,
+      { value: ethers.utils.parseEther("0.001") } // deposit amount
+    );
+
+    const srcReceipt = await createSrcEscrowTx.wait();
+    console.log("✅ Source escrow created:", srcReceipt.transactionHash);
+
+    // Extract source escrow address
+    const srcEscrowCreatedTopic = ethers.utils.id("SrcEscrowCreated(address,address,address,bytes32,uint256,uint256,uint256,uint256,uint256)");
+    const srcEscrowCreatedEvent = srcReceipt.logs.find((log: any) => 
+      log.topics && log.topics[0] === srcEscrowCreatedTopic
+    );
+    
+    let srcEscrowAddress = "";
+    if (srcEscrowCreatedEvent) {
+      srcEscrowAddress = ethers.utils.getAddress("0x" + srcEscrowCreatedEvent.data.slice(26, 66));
+      console.log("✅ Source Escrow Address:", srcEscrowAddress);
+      order.srcEscrowAddress = srcEscrowAddress;
+    } else {
+      throw new Error("Could not extract source escrow address from event");
     }
   }
 

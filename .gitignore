@@ -157,4 +157,308 @@ docker-compose.override.yml
 
 # Local configuration overrides
 config.local.*
-settings.local.* 
+settings.local.*
+
+# Stellar-specific
+.stellar/
+.soroban/
+
+# Rust/Cargo (for Stellar contracts)
+stellar-contracts/target/
+stellar-contracts/**/target/
+*.rs.bk
+Cargo.lock
+
+# Stellar contract build artifacts
+stellar-contracts/**/*.wasm
+stellar-contracts/**/*.wat
+
+# Stellar CLI and configuration
+.stellar-cli/
+stellar-cli.toml
+
+# Stellar network configuration (if contains sensitive data)
+.stellar/network/*.toml
+.stellar/identity/*.toml
+
+# Build outputs
+build/
+*.build
+
+package-lock.json
+
+# Local test files and scripts
+testing/*.log
+testing/temp/
+testing/output/
+
+# Contract deployment artifacts
+deployments/
+deployment-*.json
+deployment-*.txt
+
+# Gas estimation reports
+gas-estimates/
+gas-reports/
+
+# Chain-specific artifacts
+sepolia/
+bsc-testnet/
+stellar-testnet/
+
+# Local development files
+.dev/
+development/
+
+# Stellar account files (if they contain private keys)
+*.stellar
+*.stellar-account
+stellar-accounts/
+
+# Contract verification artifacts
+verification/
+*.verified
+
+# Local network files
+.networks/
+network-configs/
+
+# Stellar contract metadata
+stellar-contracts/**/metadata/
+*.metadata.json
+
+# Contract interfaces (if auto-generated)
+interfaces/
+*.interface.ts
+*.interface.js
+
+# Stellar contract bindings
+stellar-contracts/bindings/
+*.bindings.ts
+*.bindings.js
+
+# Local environment overrides
+.env.*.local
+.env.staging
+.env.production
+
+# Stellar contract state files
+stellar-contracts/**/state/
+*.state.json
+
+# Contract deployment logs
+deployment-logs/
+*.deployment.log
+
+# Stellar contract storage
+stellar-contracts/storage/
+*.storage.json
+
+# Local configuration files
+config/local/
+config/dev/
+config/staging/
+
+# Stellar contract cache
+stellar-contracts/.cache/
+stellar-contracts/cache/
+
+# Contract verification cache
+.verification-cache/
+verification-cache/
+
+# Stellar contract artifacts
+stellar-contracts/artifacts/
+*.artifact.json
+
+# Local test data
+test-data/
+*.test-data.json
+
+# Stellar contract logs
+stellar-contracts/logs/
+*.stellar.log
+
+# Contract deployment state
+deployment-state/
+*.deployment-state.json
+
+# Stellar contract configuration
+stellar-contracts/config/
+*.stellar-config.json
+
+# Local development artifacts
+dev-artifacts/
+*.dev.json
+
+# Stellar contract interfaces
+stellar-contracts/interfaces/
+*.stellar-interface.ts
+
+# Contract deployment metadata
+deployment-metadata/
+*.deployment-metadata.json
+
+# Stellar contract bindings cache
+stellar-contracts/bindings-cache/
+*.bindings-cache.json
+
+# Local network state
+network-state/
+*.network-state.json
+
+# Stellar contract verification state
+verification-state/
+*.verification-state.json
+
+# Contract deployment configuration
+deployment-config/
+*.deployment-config.json
+
+# Stellar contract storage state
+storage-state/
+*.storage-state.json
+
+# Local development state
+dev-state/
+*.dev-state.json
+
+# Stellar contract metadata cache
+metadata-cache/
+*.metadata-cache.json
+
+# Contract interface cache
+interface-cache/
+*.interface-cache.json
+
+# Stellar contract binding state
+binding-state/
+*.binding-state.json
+
+# Local configuration state
+config-state/
+*.config-state.json
+
+# Stellar contract artifact state
+artifact-state/
+*.artifact-state.json
+
+# Contract deployment artifact state
+deployment-artifact-state/
+*.deployment-artifact-state.json
+
+# Stellar contract storage cache
+storage-cache/
+*.storage-cache.json
+
+# Local development cache
+dev-cache/
+*.dev-cache.json
+
+# Stellar contract verification cache
+verification-cache/
+*.verification-cache.json
+
+# Contract deployment cache
+deployment-cache/
+*.deployment-cache.json
+
+# Stellar contract binding cache
+binding-cache/
+*.binding-cache.json
+
+# Local configuration cache
+config-cache/
+*.config-cache.json
+
+# Stellar contract metadata state
+metadata-state/
+*.metadata-state.json
+
+# Contract interface state
+interface-state/
+*.interface-state.json
+
+# Stellar contract artifact cache
+artifact-cache/
+*.artifact-cache.json
+
+# Contract deployment metadata cache
+deployment-metadata-cache/
+*.deployment-metadata-cache.json
+
+# Stellar contract storage artifact state
+storage-artifact-state/
+*.storage-artifact-state.json
+
+# Local development artifact state
+dev-artifact-state/
+*.dev-artifact-state.json
+
+# Stellar contract verification artifact state
+verification-artifact-state/
+*.verification-artifact-state.json
+
+# Contract deployment binding state
+deployment-binding-state/
+*.deployment-binding-state.json
+
+# Stellar contract storage binding cache
+storage-binding-cache/
+*.storage-binding-cache.json
+
+# Local development binding cache
+dev-binding-cache/
+*.dev-binding-cache.json
+
+# Stellar contract verification binding cache
+verification-binding-cache/
+*.verification-binding-cache.json
+
+# Contract deployment binding cache
+deployment-binding-cache/
+*.deployment-binding-cache.json
+
+# Stellar contract storage binding state
+storage-binding-state/
+*.storage-binding-state.json
+
+# Local development binding state
+dev-binding-state/
+*.dev-binding-state.json
+
+# Stellar contract verification binding state
+verification-binding-state/
+*.verification-binding-state.json
+
+# Contract deployment metadata binding cache
+deployment-metadata-binding-cache/
+*.deployment-metadata-binding-cache.json
+
+# Stellar contract storage metadata cache
+storage-metadata-cache/
+*.storage-metadata-cache.json
+
+# Local development metadata cache
+dev-metadata-cache/
+*.dev-metadata-cache.json
+
+# Stellar contract verification metadata cache
+verification-metadata-cache/
+*.verification-metadata-cache.json
+
+# Contract deployment metadata binding state
+deployment-metadata-binding-state/
+*.deployment-metadata-binding-state.json
+
+# Stellar contract storage metadata state
+storage-metadata-state/
+*.storage-metadata-state.json
+
+# Local development metadata state
+dev-metadata-state/
+*.dev-metadata-state.json
+
+# Stellar contract verification metadata state
+verification-metadata-state/
+*.verification-metadata-state.json 

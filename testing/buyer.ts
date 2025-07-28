@@ -82,7 +82,7 @@ export async function createOrder(): Promise<{ orderCreation: { orderId: string;
     
     // Generate secret and hash
     const secret = ethers.utils.randomBytes(32);
-    const hashedSecret = ethers.utils.keccak256(secret);
+    const hashedSecret = ethers.utils.sha256(secret); // Changed from keccak256 to sha256
     const orderId = ethers.utils.id(hashedSecret + Date.now().toString()).slice(0, 10);
     
     console.log("Generated Order ID:", orderId);

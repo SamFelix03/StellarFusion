@@ -8,7 +8,7 @@
       "symbol": "ETH",
       "decimals": 18
     },
-    "factoryAddress": "0xe3d0a25d1c9D28216F3b1BD975a33E3D9D0CDAe1",
+    "factoryAddress": "0x12c2Bc49D6a987717Fd7ACc211172Cb848a5Cdf7",
     "tokens": {
       "ETH": {
         "name": "Ethereum",
@@ -42,7 +42,7 @@
       "symbol": "BNB",
       "decimals": 18
     },
-    "factoryAddress": "0x2fc7308a6D40c68fc47990eD29656fF7c8F6FBB2",
+    "factoryAddress": "0x8193D7A3dBe672449B873Ef5d93721E6f4044e4b",
     "tokens": {
       "BNB": {
         "name": "Binance Coin",
@@ -66,5 +66,33 @@
         "isNative": false
       }
     }
+  },
+  "stellar-testnet": {
+    "name": "Stellar Testnet",
+    "chainId": "testnet",
+    "rpcUrl": "https://soroban-testnet.stellar.org:443",
+    "nativeCurrency": {
+      "name": "Stellar Lumens",
+      "symbol": "XLM",
+      "decimals": 7
+    },
+    "factoryAddress": "CCRZFIB4XJMF76GZHCREETMQZD6JG64FC4IYR62VA2M7JEMLTVBIVTNR",
+    "tokens": {
+      "XLM": {
+        "name": "Stellar Lumens",
+        "symbol": "XLM",
+        "address": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+        "decimals": 7,
+        "isNative": true
+      },
+      "USDC": {
+        "name": "USD Coin",
+        "symbol": "USDC",
+        "address": "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA",
+        "decimals": 6,
+        "isNative": false
+      }
+    },
+    "isStellar": true
   }
 } 
