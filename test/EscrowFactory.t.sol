@@ -41,7 +41,9 @@ contract EscrowFactoryTest is Test {
             withdrawalStart,
             publicWithdrawalStart,
             cancellationStart,
-            publicCancellationStart
+            publicCancellationStart,
+            0,  // partIndex = 0 for complete fill
+            1   // totalParts = 1 for complete fill
         );
         
         vm.stopPrank();
@@ -75,7 +77,9 @@ contract EscrowFactoryTest is Test {
             amount,
             withdrawalStart,
             publicWithdrawalStart,
-            cancellationStart
+            cancellationStart,
+            0,  // partIndex = 0 for complete fill
+            1   // totalParts = 1 for complete fill
         );
         
         vm.stopPrank();

@@ -4,6 +4,7 @@ import inquirer from "inquirer";
 import * as fs from "fs";
 import * as path from "path";
 import { PriceService } from "./price-service";
+import { HashLock, PartialFillOrderManager } from "./hash-lock";
 import { 
   Keypair, 
   TransactionBuilder, 
@@ -49,6 +50,8 @@ interface SwapConfig {
   destinationToken: string;
   sourceAmount: number;
   destinationAmount: number;
+  enablePartialFills?: boolean;
+  partsCount?: number;
 }
 
 interface Order {
@@ -67,6 +70,25 @@ interface Order {
   cancellationStart: number;
   publicCancellationStart: number;
   srcEscrowAddress?: string;
+  // Partial fill support
+  isPartialFillEnabled?: boolean;
+  partialFillManager?: PartialFillOrderManager;
+  filledParts?: boolean[]; // Track which parts have been filled
+  partAmounts?: ethers.BigNumber[]; // Amount for each part
+}
+
+interface PartialFillSegment {
+  index: number;
+  secret: string;
+  secretHash: string;
+  leaf: string;
+  proof: string[];
+  srcAmount: ethers.BigNumber;
+  dstAmount: ethers.BigNumber;
+  percentage: number;
+  filled: boolean;
+  srcEscrowAddress?: string;
+  dstEscrowAddress?: string;
 }
 
 class DynamicSwapInterface {
@@ -632,7 +654,7 @@ class DynamicSwapInterface {
 
     if (dstTokenConfig.isNative) {
       // For native tokens, we need to wrap them first
-      const wrappedTokenSymbol = config.destinationChain === 'sepolia' ? 'WETH' : 'WBNB';
+      const wrappedTokenSymbol = config.destinationChain.includes('sepolia') ? 'WETH' : 'WBNB';
       const wrappedTokenAddress = this.chains[config.destinationChain].tokens[wrappedTokenSymbol].address;
       
       const wrapperABI = [
@@ -684,6 +706,8 @@ class DynamicSwapInterface {
       order.withdrawalStart,
       order.publicWithdrawalStart,
       order.cancellationStart,
+      0,  // partIndex = 0 for complete fill
+      1,  // totalParts = 1 for complete fill
       { value: ethers.utils.parseEther("0.001") } // deposit amount
     );
     
@@ -795,6 +819,34 @@ class DynamicSwapInterface {
       }
     ]);
 
+    // Ask about partial fills
+    const { enablePartialFills } = await inquirer.prompt([
+      {
+        type: "confirm",
+        name: "enablePartialFills",
+        message: "Enable partial fills (allow order to be filled in multiple parts)?",
+        default: false
+      }
+    ]);
+
+    let partsCount = 1;
+    if (enablePartialFills) {
+      const { partsCountInput } = await inquirer.prompt([
+        {
+          type: "number",
+          name: "partsCountInput",
+          message: "How many parts should the order be divided into? (2-8):",
+          default: 4,
+          validate: (input: number) => {
+            if (input < 2 || input > 8) return "Parts count must be between 2 and 8";
+            if (!Number.isInteger(input)) return "Parts count must be a whole number";
+            return true;
+          }
+        }
+      ]);
+      partsCount = partsCountInput;
+    }
+
     // Calculate destination amount using price API
     console.log("\n💰 Fetching current prices...");
     try {
@@ -810,7 +862,9 @@ class DynamicSwapInterface {
         sourceToken,
         destinationToken,
         sourceAmount,
-        destinationAmount
+        destinationAmount,
+        enablePartialFills,
+        partsCount
       };
     } catch (error) {
       console.error("Error fetching prices:", error);
@@ -834,7 +888,9 @@ class DynamicSwapInterface {
         sourceToken,
         destinationToken,
         sourceAmount,
-        destinationAmount: manualDestAmount
+        destinationAmount: manualDestAmount,
+        enablePartialFills,
+        partsCount
       };
     }
   }
@@ -844,6 +900,12 @@ class DynamicSwapInterface {
     console.log("===============");
     console.log(`Source: ${config.sourceAmount} ${config.sourceToken} on ${this.chains[config.sourceChain].name}`);
     console.log(`Destination: ${config.destinationAmount.toFixed(6)} ${config.destinationToken} on ${this.chains[config.destinationChain].name}`);
+    
+    if (config.enablePartialFills) {
+      console.log(`\n🔀 Partial Fill Settings:`);
+      console.log(`Parts Count: ${config.partsCount}`);
+      console.log(`Per Part: ~${(config.sourceAmount / config.partsCount!).toFixed(6)} ${config.sourceToken} → ~${(config.destinationAmount / config.partsCount!).toFixed(6)} ${config.destinationToken}`);
+    }
     
     try {
       const sourcePrice = await PriceService.getTokenPrice(config.sourceToken);
@@ -887,15 +949,22 @@ class DynamicSwapInterface {
     // Generate order
     const order = await this.createOrder(config, buyerSigner.address);
     
-    // Step 1: Buyer preparation
-    console.log("\n📋 STEP 1: Buyer Preparation");
-    console.log("-----------------------------");
-    await this.prepareBuyer(config, buyerSigner, order);
+    // Check if partial fills are enabled
+    if (order.isPartialFillEnabled) {
+      // Execute partial fill workflow
+      await this.executePartialFillWorkflow(config, order);
+    } else {
+      // Execute single fill workflow
+      // Step 1: Buyer preparation
+      console.log("\n📋 STEP 1: Buyer Preparation");
+      console.log("-----------------------------");
+      await this.prepareBuyer(config, buyerSigner, order);
 
-    // Step 2: Resolver execution
-    console.log("\n🔄 STEP 2: Resolver Execution");
-    console.log("------------------------------");
-    await this.executeResolverWorkflow(config, order, resolverSigner, dstSigner);
+      // Step 2: Resolver execution
+      console.log("\n🔄 STEP 2: Resolver Execution");
+      console.log("------------------------------");
+      await this.executeResolverWorkflow(config, order, resolverSigner, dstSigner);
+    }
 
     console.log("\n🎉 Cross-Chain Swap Completed Successfully!");
     console.log("===========================================");
@@ -904,12 +973,35 @@ class DynamicSwapInterface {
   }
 
   private async createOrder(config: SwapConfig, buyerAddress: string): Promise<Order> {
-    // Generate secret and hash
-    const secret = ethers.utils.randomBytes(32);
-    const hashedSecret = ethers.utils.sha256(secret); // Changed from keccak256 to sha256
+    let secret: string;
+    let hashedSecret: string;
+    let partialFillManager: PartialFillOrderManager | undefined;
+    let partAmounts: ethers.BigNumber[] | undefined;
+    let filledParts: boolean[] | undefined;
+
+    if (config.enablePartialFills && config.partsCount! > 1) {
+      // Create partial fill manager with merkle tree
+      partialFillManager = new PartialFillOrderManager(config.partsCount!);
+      hashedSecret = partialFillManager.getHashLock();
+      // Use first secret as the main order secret (for backwards compatibility)
+      secret = partialFillManager.getSecret(0);
+      
+      // Initialize tracking arrays for parts
+      filledParts = Array(config.partsCount).fill(false);
+      
+      console.log(`\n🌳 Generated Merkle Tree for ${config.partsCount} parts:`);
+      console.log(`📋 HashLock (Merkle Root): ${hashedSecret}`);
+      console.log(`🔐 Total secrets generated: ${config.partsCount! + 1}`);
+    } else {
+      // Single fill - generate traditional secret and hash
+      const secretBytes = ethers.utils.randomBytes(32);
+      secret = ethers.utils.hexlify(secretBytes);
+      hashedSecret = ethers.utils.sha256(secretBytes);
+    }
+    
     const orderId = ethers.utils.id(hashedSecret + Date.now().toString()).slice(0, 10);
     
-    // Time windows (in seconds from now)
+    // Time windows (in seconds from now) - use system time
     const now = Math.floor(Date.now() / 1000);
     const withdrawalStart = now + 60; // 1 minute from now
     const publicWithdrawalStart = now + 300; // 5 minutes from now
@@ -923,6 +1015,21 @@ class DynamicSwapInterface {
     const srcAmount = ethers.utils.parseUnits(config.sourceAmount.toString(), srcTokenConfig.decimals);
     const dstAmount = ethers.utils.parseUnits(config.destinationAmount.toString(), dstTokenConfig.decimals);
 
+    // Calculate part amounts if partial fills are enabled
+    if (config.enablePartialFills && config.partsCount! > 1) {
+      partAmounts = [];
+      const srcAmountPerPart = srcAmount.div(config.partsCount!);
+      const dstAmountPerPart = dstAmount.div(config.partsCount!);
+      
+      for (let i = 0; i < config.partsCount!; i++) {
+        partAmounts.push(srcAmountPerPart);
+      }
+      
+      console.log(`💰 Part amounts calculated:`);
+      console.log(`   Source per part: ${ethers.utils.formatUnits(srcAmountPerPart, srcTokenConfig.decimals)} ${config.sourceToken}`);
+      console.log(`   Destination per part: ${ethers.utils.formatUnits(dstAmountPerPart, dstTokenConfig.decimals)} ${config.destinationToken}`);
+    }
+
     return {
       orderId,
       buyerAddress,
@@ -933,12 +1040,365 @@ class DynamicSwapInterface {
       srcAmount,
       dstAmount,
       hashedSecret,
-      secret: ethers.utils.hexlify(secret),
+      secret,
       withdrawalStart,
       publicWithdrawalStart,
       cancellationStart,
-      publicCancellationStart
+      publicCancellationStart,
+      isPartialFillEnabled: config.enablePartialFills,
+      partialFillManager,
+      filledParts,
+      partAmounts
     };
+  }
+
+  private createPartialFillSegments(order: Order, config: SwapConfig): PartialFillSegment[] {
+    if (!order.isPartialFillEnabled || !order.partialFillManager || !order.partAmounts) {
+      return [];
+    }
+
+    const segments: PartialFillSegment[] = [];
+    const partsCount = order.partialFillManager.getPartsCount();
+    const srcAmountPerPart = order.srcAmount.div(partsCount);
+    const dstAmountPerPart = order.dstAmount.div(partsCount);
+
+    console.log(`\n🔍 DEBUG - Amount calculations:`);
+    console.log(`   Total srcAmount: ${ethers.utils.formatUnits(order.srcAmount, this.chains[config.sourceChain].tokens[config.sourceToken].decimals)} ${config.sourceToken}`);
+    console.log(`   Parts count: ${partsCount}`);
+    console.log(`   SrcAmount per part: ${ethers.utils.formatUnits(srcAmountPerPart, this.chains[config.sourceChain].tokens[config.sourceToken].decimals)} ${config.sourceToken}`);
+    console.log(`   SrcAmount per part (raw): ${srcAmountPerPart.toString()}`);
+
+    for (let i = 0; i < partsCount; i++) {
+      const segment: PartialFillSegment = {
+        index: i,
+        secret: order.partialFillManager.getSecret(i),
+        secretHash: order.partialFillManager.getSecretHash(i),
+        leaf: order.partialFillManager.getLeaf(i),
+        proof: order.partialFillManager.getProof(i),
+        srcAmount: srcAmountPerPart,
+        dstAmount: dstAmountPerPart,
+        percentage: (100 / partsCount) * (i + 1),
+        filled: false
+      };
+      segments.push(segment);
+    }
+
+    console.log(`\n📦 Created ${segments.length} partial fill segments:`);
+    segments.forEach((segment, idx) => {
+      console.log(`   Part ${idx}: ${ethers.utils.formatUnits(segment.srcAmount, this.chains[config.sourceChain].tokens[config.sourceToken].decimals)} ${config.sourceToken} (${segment.percentage.toFixed(1)}%)`);
+    });
+
+    return segments;
+  }
+
+  private async executePartialFillWorkflow(config: SwapConfig, order: Order) {
+    if (!order.isPartialFillEnabled) {
+      console.log("⚠️ Order does not have partial fills enabled");
+      return;
+    }
+
+    console.log("\n🔀 PARTIAL FILL EXECUTION");
+    console.log("=========================");
+    console.log(`Order will be filled in ${order.partialFillManager!.getPartsCount()} parts by the resolver`);
+
+    // Create segments
+    const segments = this.createPartialFillSegments(order, config);
+    
+    // Create signers
+    const srcProvider = new ethers.providers.JsonRpcProvider(this.chains[config.sourceChain].rpcUrl);
+    const dstProvider = new ethers.providers.JsonRpcProvider(this.chains[config.destinationChain].rpcUrl);
+    const buyerSigner = new ethers.Wallet(this.buyerPrivateKey, srcProvider);
+    const resolverSigner = new ethers.Wallet(this.resolverPrivateKey, srcProvider);
+    const dstSigner = new ethers.Wallet(this.resolverPrivateKey, dstProvider);
+
+    // Step 1: Buyer preparation (full amount approval)
+    console.log("\n📋 STEP 1: Buyer Preparation (Full Amount Approval)");
+    console.log("----------------------------------------------------");
+    await this.prepareBuyer(config, buyerSigner, order);
+
+    // Step 2: Resolver fills the order in parts
+    console.log("\n🔄 STEP 2: Resolver Executes Partial Fills");
+    console.log("-------------------------------------------");
+    
+    let totalFilled = ethers.BigNumber.from(0);
+    let fillStatus = {
+      totalParts: segments.length,
+      completedParts: 0,
+      remainingParts: segments.length,
+      totalFilledAmount: totalFilled,
+      percentageComplete: 0
+    };
+
+    for (let i = 0; i < segments.length; i++) {
+      const segment = segments[i];
+      console.log(`\n🎯 Filling Part ${i + 1}/${segments.length} (${segment.percentage.toFixed(1)}%)`);
+      console.log(`   Amount: ${ethers.utils.formatUnits(segment.srcAmount, this.chains[config.sourceChain].tokens[config.sourceToken].decimals)} ${config.sourceToken}`);
+      console.log(`   Secret: ${segment.secret}`);
+      console.log(`   Leaf: ${segment.leaf}`);
+      console.log(`   Proof length: ${segment.proof.length}`);
+
+      try {
+        // Create and execute partial escrows for this segment
+        await this.createAndExecutePartialEscrowPair(config, order, segment, resolverSigner, dstSigner, buyerSigner.address);
+        
+        // Update tracking
+        segment.filled = true;
+        totalFilled = totalFilled.add(segment.srcAmount);
+        fillStatus.completedParts++;
+        fillStatus.remainingParts--;
+        fillStatus.totalFilledAmount = totalFilled;
+        fillStatus.percentageComplete = (fillStatus.completedParts / fillStatus.totalParts) * 100;
+
+        // Display current status
+        this.displayPartialFillStatus(config, order, fillStatus);
+
+        console.log(`✅ Part ${i + 1} completed successfully!`);
+        
+        // Mark in order tracking
+        if (order.filledParts) {
+          order.filledParts[i] = true;
+        }
+
+      } catch (error) {
+        console.error(`❌ Error filling part ${i + 1}:`, error);
+        break;
+      }
+
+      // Wait between fills (for demo purposes)
+      if (i < segments.length - 1) {
+        console.log("⏳ Waiting 5 seconds before next fill...");
+        await new Promise(resolve => setTimeout(resolve, 5000));
+      }
+    }
+
+    console.log("\n🎉 PARTIAL FILL WORKFLOW COMPLETED!");
+    console.log("====================================");
+    console.log(`✅ Order filled: ${fillStatus.completedParts}/${fillStatus.totalParts} parts (${fillStatus.percentageComplete.toFixed(1)}%)`);
+    console.log(`✅ Total filled: ${ethers.utils.formatUnits(fillStatus.totalFilledAmount, this.chains[config.sourceChain].tokens[config.sourceToken].decimals)} ${config.sourceToken}`);
+  }
+
+  private displayPartialFillStatus(config: SwapConfig, order: Order, fillStatus: any) {
+    console.log("\n📊 PARTIAL FILL STATUS");
+    console.log("======================");
+    console.log(`Progress: ${fillStatus.completedParts}/${fillStatus.totalParts} parts (${fillStatus.percentageComplete.toFixed(1)}%)`);
+    console.log(`Completed: ${ethers.utils.formatUnits(fillStatus.totalFilledAmount, this.chains[config.sourceChain].tokens[config.sourceToken].decimals)} ${config.sourceToken}`);
+    console.log(`Remaining: ${ethers.utils.formatUnits(order.srcAmount.sub(fillStatus.totalFilledAmount), this.chains[config.sourceChain].tokens[config.sourceToken].decimals)} ${config.sourceToken}`);
+    
+    // Visual progress bar
+    const progressBar = "█".repeat(Math.floor(fillStatus.percentageComplete / 10)) + "░".repeat(10 - Math.floor(fillStatus.percentageComplete / 10));
+    console.log(`Progress: [${progressBar}] ${fillStatus.percentageComplete.toFixed(1)}%`);
+  }
+
+  private async createAndExecutePartialEscrowPair(
+    config: SwapConfig,
+    order: Order,
+    segment: PartialFillSegment,
+    resolverSigner: ethers.Wallet,
+    dstSigner: ethers.Wallet,
+    buyerAddress: string
+  ) {
+    const srcFactoryAddress = this.chains[config.sourceChain].factoryAddress;
+    const dstFactoryAddress = this.chains[config.destinationChain].factoryAddress;
+
+    // Extract merkle root from hashlock (remove embedded parts count)
+    const merkleRoot = ethers.utils.hexlify(
+      ethers.BigNumber.from(order.hashedSecret).and(
+        ethers.constants.MaxUint256.sub(0xFFFF)
+      ).toHexString()
+    );
+
+    console.log(`🏗️ Creating escrow pair for part ${segment.index}`);
+
+    // Create source escrow using unified function
+    const srcFactoryContract = new ethers.Contract(srcFactoryAddress, factoryABI, resolverSigner);
+    
+    console.log(`🔍 DEBUG - createSrcEscrow parameters:`);
+    console.log(`   hashedSecret: ${order.hashedSecret}`);
+    console.log(`   recipient: ${resolverSigner.address}`);
+    console.log(`   buyer: ${buyerAddress}`);
+    console.log(`   tokenAmount: ${segment.srcAmount.toString()}`);
+    console.log(`   withdrawalStart: ${order.withdrawalStart}`);
+    console.log(`   publicWithdrawalStart: ${order.publicWithdrawalStart}`);
+    console.log(`   cancellationStart: ${order.cancellationStart}`);
+    console.log(`   publicCancellationStart: ${order.publicCancellationStart}`);
+    console.log(`   partIndex: ${segment.index}`);
+    console.log(`   totalParts: ${order.partialFillManager!.getPartsCount()}`);
+    console.log(`   value: ${ethers.utils.parseUnits("0.001", "ether").toString()}`);
+    
+    // Try using the exact same approach as the working case
+    const createSrcTx = await srcFactoryContract.createSrcEscrow(
+      order.hashedSecret,  // Use merkleRoot instead of order.hashedSecret for consistency
+      resolverSigner.address, // recipient is resolver
+      buyerAddress, // buyer provides the tokens
+      segment.srcAmount,
+      order.withdrawalStart,
+      order.publicWithdrawalStart,
+      order.cancellationStart,
+      order.publicCancellationStart,
+      segment.index,          // partIndex
+      order.partialFillManager!.getPartsCount(), // totalParts
+      { value: ethers.utils.parseEther("0.001") } // deposit amount - same as working case
+    );
+    
+    const srcReceipt = await createSrcTx.wait();
+    console.log(`✅ Source escrow created: ${srcReceipt.transactionHash}`);
+
+    // Prepare destination tokens if needed
+    await this.prepareDestinationTokens(config, dstSigner, segment.dstAmount);
+
+    // Create destination escrow using unified function  
+    const dstFactoryContract = new ethers.Contract(dstFactoryAddress, factoryABI, dstSigner);
+    
+    const createDstTx = await dstFactoryContract.createDstEscrow(
+      order.hashedSecret,  // Use order.hashedSecret for consistency with source escrow
+      buyerAddress, // recipient (buyer)
+      segment.dstAmount,
+      order.withdrawalStart,
+      order.publicWithdrawalStart,
+      order.cancellationStart,
+      segment.index,          // partIndex
+      order.partialFillManager!.getPartsCount(), // totalParts
+      { 
+        value: ethers.utils.parseEther("0.001"),
+        gasLimit: 2000000
+      }
+    );
+    
+    const dstReceipt = await createDstTx.wait();
+    console.log(`✅ Destination escrow created: ${dstReceipt.transactionHash}`);
+
+    // Extract real escrow addresses from events
+    const srcEscrowAddress = this.extractEscrowAddressFromReceipt(srcReceipt);
+    const dstEscrowAddress = this.extractEscrowAddressFromReceipt(dstReceipt);
+
+    // Store addresses in segment for tracking
+    segment.srcEscrowAddress = srcEscrowAddress;
+    segment.dstEscrowAddress = dstEscrowAddress;
+
+    // Wait for withdrawal window
+    console.log("⏳ Waiting for withdrawal window...");
+    const currentTime = Math.floor(Date.now() / 1000);
+    const timeToWait = order.withdrawalStart - currentTime;
+    
+    if (timeToWait > 0) {
+      console.log(`   Need to wait ${timeToWait} seconds...`);
+      const skipWaiting = await inquirer.prompt([
+        {
+          type: 'input',
+          name: 'skipWaiting',
+          message: 'Skip waiting? (y/n): '
+        }
+      ]);
+      
+      if (skipWaiting.toLowerCase() === 'y' || skipWaiting.toLowerCase() === 'yes') {
+        console.log("🚀 Skipping withdrawal timelock for demo purposes");
+      } else {
+        console.log(`   Waiting ${timeToWait} seconds...`);
+        await new Promise(resolve => setTimeout(resolve, timeToWait * 1000));
+      }
+    }
+
+    // Execute real withdrawals with merkle proofs
+    console.log(`🔓 Executing withdrawals with merkle proof...`);
+    await this.executePartialWithdrawals(segment, resolverSigner, dstSigner);
+  }
+
+  private extractEscrowAddressFromReceipt(receipt: any): string {
+    // Extract escrow address from SrcEscrowCreated or DstEscrowCreated event
+    const escrowCreatedTopic = ethers.utils.id("SrcEscrowCreated(address,address,address,bytes32,uint256,uint256,uint256,uint256,uint256)");
+    const dstEscrowCreatedTopic = ethers.utils.id("DstEscrowCreated(address,address,address,bytes32,uint256,uint256,uint256,uint256)");
+    
+    const escrowEvent = receipt.logs.find((log: any) => 
+      log.topics && (log.topics[0] === escrowCreatedTopic || log.topics[0] === dstEscrowCreatedTopic)
+    );
+    
+    if (escrowEvent) {
+      return ethers.utils.getAddress("0x" + escrowEvent.data.slice(26, 66));
+    }
+    
+    throw new Error("Could not extract escrow address from receipt");
+  }
+
+  private async prepareDestinationTokens(config: SwapConfig, dstSigner: ethers.Wallet, amount: ethers.BigNumber) {
+    const dstTokenConfig = this.chains[config.destinationChain].tokens[config.destinationToken];
+    const dstFactoryAddress = this.chains[config.destinationChain].factoryAddress;
+
+    if (dstTokenConfig.isNative) {
+      // For native tokens, wrap them
+      const wrappedTokenSymbol = config.destinationChain.includes('sepolia') ? 'WETH' : 'WBNB';
+      const wrappedTokenAddress = this.chains[config.destinationChain].tokens[wrappedTokenSymbol].address;
+      
+      const wrapperABI = [
+        "function deposit() payable",
+        "function approve(address spender, uint256 amount) returns (bool)",
+        "function balanceOf(address owner) view returns (uint256)"
+      ];
+      
+      const wrapperContract = new ethers.Contract(wrappedTokenAddress, wrapperABI, dstSigner);
+      
+      // Check balance and wrap if needed
+      const balance = await wrapperContract.balanceOf(dstSigner.address);
+      if (balance.lt(amount)) {
+        const amountToWrap = amount.sub(balance).add(ethers.utils.parseEther("0.001"));
+        console.log(`   Wrapping ${ethers.utils.formatEther(amountToWrap)} ${config.destinationToken}...`);
+        
+        const wrapTx = await wrapperContract.deposit({ value: amountToWrap });
+        await wrapTx.wait();
+        console.log("   ✅ Token wrapped successfully");
+      }
+      
+      // Approve factory
+      const approveTx = await wrapperContract.approve(dstFactoryAddress, amount);
+      await approveTx.wait();
+      console.log("   ✅ Factory approved to spend wrapped tokens");
+    } else {
+      // For ERC20 tokens, just approve
+      const tokenABI = [
+        "function approve(address spender, uint256 amount) returns (bool)",
+        "function balanceOf(address owner) view returns (uint256)"
+      ];
+      
+      const tokenContract = new ethers.Contract(dstTokenConfig.address, tokenABI, dstSigner);
+      
+      const approveTx = await tokenContract.approve(dstFactoryAddress, amount);
+      await approveTx.wait();
+      console.log("   ✅ Factory approved to spend tokens");
+    }
+  }
+
+  private async executePartialWithdrawals(
+    segment: PartialFillSegment,
+    resolverSigner: ethers.Wallet,
+    dstSigner: ethers.Wallet
+  ) {
+    console.log(`🔐 Withdrawing with secret ${segment.index} and merkle proof`);
+    console.log(`   Secret: ${segment.secret.slice(0, 10)}...`);
+    console.log(`   Proof elements: ${segment.proof.length}`);
+    console.log(`   Source escrow: ${segment.srcEscrowAddress}`);
+    console.log(`   Destination escrow: ${segment.dstEscrowAddress}`);
+
+    // Real withdrawal from source escrow (resolver gets tokens)
+    const srcEscrowContract = new ethers.Contract(segment.srcEscrowAddress!, enhancedEscrowABI, resolverSigner);
+    
+    console.log("   📤 Withdrawing from source escrow (resolver receives tokens)...");
+    const srcWithdrawTx = await srcEscrowContract.withdrawWithProof(segment.secret, segment.proof, {
+      gasLimit: 500000,
+      maxFeePerGas: ethers.utils.parseUnits("15", "gwei"),
+      maxPriorityFeePerGas: ethers.utils.parseUnits("1", "gwei")
+    });
+    await srcWithdrawTx.wait();
+    console.log(`   ✅ Source withdrawal completed: ${srcWithdrawTx.hash}`);
+
+    // Real withdrawal from destination escrow (buyer gets tokens)
+    const dstEscrowContract = new ethers.Contract(segment.dstEscrowAddress!, enhancedEscrowABI, dstSigner);
+    
+    console.log("   📤 Withdrawing from destination escrow (buyer receives tokens)...");
+    const dstWithdrawTx = await dstEscrowContract.withdrawWithProof(segment.secret, segment.proof, {
+      gasLimit: 500000,
+      gasPrice: ethers.utils.parseUnits("2", "gwei")
+    });
+    await dstWithdrawTx.wait();
+    console.log(`   ✅ Destination withdrawal completed: ${dstWithdrawTx.hash}`);
   }
 
   private async prepareBuyer(config: SwapConfig, buyerSigner: ethers.Wallet, order: Order) {
@@ -947,7 +1407,7 @@ class DynamicSwapInterface {
 
     if (srcTokenConfig.isNative) {
       // For native tokens, we need to wrap them first
-      const wrappedTokenSymbol = config.sourceChain === 'sepolia' ? 'WETH' : 'WBNB';
+      const wrappedTokenSymbol = config.sourceChain.includes('sepolia') ? 'WETH' : 'WBNB';
       const wrappedTokenAddress = this.chains[config.sourceChain].tokens[wrappedTokenSymbol].address;
       
       console.log(`Wrapping ${config.sourceAmount} ${config.sourceToken} to ${wrappedTokenSymbol}...`);
@@ -1063,6 +1523,8 @@ class DynamicSwapInterface {
       order.publicWithdrawalStart,
       order.cancellationStart,
       order.publicCancellationStart,
+      0,  // partIndex = 0 for complete fill
+      1,  // totalParts = 1 for complete fill
       { value: ethers.utils.parseEther("0.001") } // deposit amount
     );
 
@@ -1110,6 +1572,8 @@ class DynamicSwapInterface {
       order.publicWithdrawalStart,
       order.cancellationStart,
       order.publicCancellationStart,
+      0,  // partIndex = 0 for complete fill
+      1,  // totalParts = 1 for complete fill
       { value: ethers.utils.parseEther("0.001") } // deposit amount
     );
     
@@ -1140,7 +1604,7 @@ class DynamicSwapInterface {
 
     if (dstTokenConfig.isNative) {
       // For native tokens, we need to wrap them first
-      const wrappedTokenSymbol = config.destinationChain === 'sepolia' ? 'WETH' : 'WBNB';
+      const wrappedTokenSymbol = config.destinationChain.includes('sepolia') ? 'WETH' : 'WBNB';
       const wrappedTokenAddress = this.chains[config.destinationChain].tokens[wrappedTokenSymbol].address;
       
       const wrapperABI = [
@@ -1192,6 +1656,8 @@ class DynamicSwapInterface {
       order.withdrawalStart,
       order.publicWithdrawalStart,
       order.cancellationStart,
+      0,  // partIndex = 0 for complete fill
+      1,  // totalParts = 1 for complete fill
       { value: ethers.utils.parseEther("0.001") } // deposit amount
     );
     
@@ -1261,10 +1727,10 @@ class DynamicSwapInterface {
   }
 }
 
-// ABI definitions
+// ABI definitions - Updated to support both complete and partial fills
 const factoryABI = [
-  "function createSrcEscrow(bytes32 hashedSecret, address recipient, address buyer, uint256 tokenAmount, uint256 withdrawalStart, uint256 publicWithdrawalStart, uint256 cancellationStart, uint256 publicCancellationStart) external payable",
-  "function createDstEscrow(bytes32 hashedSecret, address recipient, uint256 tokenAmount, uint256 withdrawalStart, uint256 publicWithdrawalStart, uint256 cancellationStart) external payable"
+  "function createSrcEscrow(bytes32 hashedSecret, address recipient, address buyer, uint256 tokenAmount, uint256 withdrawalStart, uint256 publicWithdrawalStart, uint256 cancellationStart, uint256 publicCancellationStart, uint256 partIndex, uint16 totalParts) external payable",
+  "function createDstEscrow(bytes32 hashedSecret, address recipient, uint256 tokenAmount, uint256 withdrawalStart, uint256 publicWithdrawalStart, uint256 cancellationStart, uint256 partIndex, uint16 totalParts) external payable"
 ];
 
 const escrowABI = [
@@ -1273,6 +1739,19 @@ const escrowABI = [
   "function creator() view returns (address)",
   "function amount() view returns (uint256)",
   "function token() view returns (address)"
+];
+
+// Enhanced escrow ABI to support both complete and partial fills
+const enhancedEscrowABI = [
+  "function withdraw(bytes calldata secret) external",                     // For complete fills
+  "function withdrawWithProof(bytes calldata secret, bytes32[] calldata merkleProof) external", // For partial fills
+  "function cancel() external",
+  "function recipient() view returns (address)",
+  "function creator() view returns (address)",
+  "function amount() view returns (uint256)",
+  "function token() view returns (address)",
+  "function partIndex() view returns (uint256)",    // Only available in partial fill escrows
+  "function totalParts() view returns (uint16)"     // Only available in partial fill escrows
 ];
 
 // Main execution
@@ -1299,4 +1778,4 @@ if (require.main === module) {
     });
 }
 
-export { DynamicSwapInterface }; 
+export { DynamicSwapInterface };
