@@ -23,6 +23,7 @@ import {
   ArrowLeft,
 } from "lucide-react"
 import LiquidChrome from "./components/LiquidChrome"
+import Iridescence from "./components/Iridescence"
 
 interface Auction {
   id: string
@@ -474,7 +475,7 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
               transition={{ type: "spring", stiffness: 300, damping: 30 }}
-              className="relative w-full max-w-lg bg-white/90 backdrop-blur-2xl rounded-2xl shadow-2xl border border-white/50 overflow-hidden"
+              className="relative w-full max-w-md bg-white/90 backdrop-blur-2xl rounded-2xl shadow-2xl border border-white/50 overflow-hidden max-h-[90vh] overflow-y-auto"
             >
               {/* Close Button */}
               <button
@@ -485,19 +486,19 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
               </button>
 
               {/* Header */}
-              <div className="p-6 border-b border-white/30">
-                <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 bg-black/5 backdrop-blur-sm rounded-xl flex items-center justify-center text-black font-bold border border-black/10">
+              <div className="p-4 border-b border-white/30">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-black/5 backdrop-blur-sm rounded-xl flex items-center justify-center text-black font-bold border border-black/10">
                     {selectedAuction.tokenSymbol.charAt(0)}
                   </div>
                   <div>
-                    <div className="flex items-center gap-3">
-                      <h2 className="text-xl font-bold text-black">{selectedAuction.tokenName}</h2>
+                    <div className="flex items-center gap-2">
+                      <h2 className="text-lg font-bold text-black">{selectedAuction.tokenName}</h2>
                       <Badge className="bg-blue-50/80 text-blue-700 border-blue-200/50 backdrop-blur-sm text-xs">
                         FUSION SWAP
                       </Badge>
                     </div>
-                    <div className="flex items-center gap-2 text-sm text-gray-600 mt-1">
+                    <div className="flex items-center gap-2 text-xs text-gray-600 mt-1">
                       <span>{selectedAuction.fromChain}</span>
                       <ArrowLeftRight className="w-3 h-3" />
                       <span>{selectedAuction.toChain}</span>
@@ -507,16 +508,16 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
               </div>
 
               {/* Content */}
-              <div className="p-6 space-y-4">
+              <div className="p-4 space-y-3">
                 {/* Price Cards */}
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="bg-white/50 backdrop-blur-xl border border-white/50 rounded-lg p-3">
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="bg-white/50 backdrop-blur-xl border border-white/50 rounded-lg p-2">
                     <div className="flex items-center gap-1 mb-1">
                       <TrendingDown className="w-3 h-3 text-emerald-600" />
                       <span className="font-medium text-emerald-800 text-xs">Current</span>
                     </div>
                     <motion.p
-                      className="text-lg font-bold text-black"
+                      className="text-base font-bold text-black"
                       animate={{ opacity: [0.9, 1, 0.9] }}
                       transition={{ duration: 2, repeat: Number.POSITIVE_INFINITY, ease: "easeInOut" }}
                     >
@@ -524,18 +525,18 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
                     </motion.p>
                   </div>
 
-                  <div className="bg-white/50 backdrop-blur-xl border border-white/50 rounded-lg p-3">
+                  <div className="bg-white/50 backdrop-blur-xl border border-white/50 rounded-lg p-2">
                     <div className="flex items-center gap-1 mb-1">
                       <Layers className="w-3 h-3 text-blue-600" />
                       <span className="font-medium text-blue-800 text-xs">Min</span>
                     </div>
-                    <p className="text-lg font-bold text-black">${selectedAuction.minPrice.toFixed(4)}</p>
+                    <p className="text-base font-bold text-black">${selectedAuction.minPrice.toFixed(4)}</p>
                   </div>
                 </div>
 
                 {/* Contract Details */}
-                <div className="bg-white/50 backdrop-blur-xl border border-white/50 rounded-lg p-4">
-                  <div className="flex items-center gap-2 mb-3">
+                <div className="bg-white/50 backdrop-blur-xl border border-white/50 rounded-lg p-3">
+                  <div className="flex items-center gap-2 mb-2">
                     <Wallet className="w-4 h-4 text-gray-700" />
                     <h3 className="font-semibold text-black text-sm">Contract Details</h3>
                   </div>
@@ -549,25 +550,25 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
                 </div>
 
                 {/* Description */}
-                <div className="bg-white/50 backdrop-blur-xl border border-white/50 rounded-lg p-4">
+                <div className="bg-white/50 backdrop-blur-xl border border-white/50 rounded-lg p-3">
                   <h4 className="font-semibold text-black text-sm mb-2 flex items-center gap-2">
                     <Sparkles className="w-4 h-4 text-amber-500" />
                     Swap Details
                   </h4>
-                  <p className="text-gray-700 text-sm leading-relaxed">{selectedAuction.description}</p>
+                  <p className="text-gray-700 text-xs leading-relaxed">{selectedAuction.description}</p>
                 </div>
 
                 {/* Segments for Partial Fill Auctions */}
                 {selectedAuction.type === "partial-fill" && selectedAuction.segments && (
-                  <div className="bg-white/50 backdrop-blur-xl border border-white/50 rounded-lg p-4">
-                    <h4 className="font-semibold text-black text-sm mb-3 flex items-center gap-2">
+                  <div className="bg-white/50 backdrop-blur-xl border border-white/50 rounded-lg p-3">
+                    <h4 className="font-semibold text-black text-sm mb-2 flex items-center gap-2">
                       <Layers className="w-4 h-4 text-purple-500" />
                       Auction Segments
                     </h4>
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-2 gap-2">
                       {selectedAuction.segments.map((segment, index) => (
-                        <div key={segment.id} className="bg-black/5 backdrop-blur-sm rounded-lg p-3 border border-black/10">
-                          <div className="flex items-center justify-between mb-2">
+                        <div key={segment.id} className="bg-black/5 backdrop-blur-sm rounded-lg p-2 border border-black/10">
+                          <div className="flex items-center justify-between mb-1">
                             <span className="text-xs font-medium text-gray-600">Segment {index + 1}</span>
                             <Badge className={`${
                               segment.status === "active" 
@@ -604,7 +605,7 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
                 {/* Action Button */}
                 <motion.div whileHover={{ y: -2 }} whileTap={{ y: 1 }}>
                   <Button
-                    className="w-full h-12 bg-black hover:bg-black/90 text-white font-bold backdrop-blur-sm border border-black/10 shadow-xl rounded-lg"
+                    className="w-full h-10 bg-black hover:bg-black/90 text-white font-bold backdrop-blur-sm border border-black/10 shadow-xl rounded-lg"
                     onClick={() => {
                       setIsModalOpen(false)
                     }}
