@@ -4,12 +4,31 @@ import { useState } from "react"
 import LandingPage from "../landing-page"
 import Component from "../dutch-auction-platform"
 
-export default function Page() {
-  const [showPlatform, setShowPlatform] = useState(false)
+type View = "landing" | "swap" | "resolver"
 
-  if (showPlatform) {
-    return <Component />
+export default function Page() {
+  const [currentView, setCurrentView] = useState<View>("landing")
+
+  const handleEnterSwap = () => {
+    setCurrentView("swap")
   }
 
-  return <LandingPage onEnterPlatform={() => setShowPlatform(true)} />
+  const handleEnterResolver = () => {
+    setCurrentView("resolver")
+  }
+
+  const handleBackToHome = () => {
+    setCurrentView("landing")
+  }
+
+  if (currentView === "swap" || currentView === "resolver") {
+    return <Component onBackToHome={handleBackToHome} />
+  }
+
+  return (
+    <LandingPage 
+      onEnterPlatform={handleEnterSwap} 
+      onEnterResolver={handleEnterResolver} 
+    />
+  )
 }

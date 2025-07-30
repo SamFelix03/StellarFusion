@@ -20,7 +20,9 @@ import {
   Layers,
   Sparkles,
   X,
+  ArrowLeft,
 } from "lucide-react"
+import LiquidChrome from "./components/LiquidChrome"
 
 interface Auction {
   id: string
@@ -79,7 +81,7 @@ const generateMockAuctions = (): Auction[] => {
   })
 }
 
-export default function Component() {
+export default function Component({ onBackToHome }: { onBackToHome?: () => void }) {
   const [auctions, setAuctions] = useState<Auction[]>(generateMockAuctions())
   const [selectedAuction, setSelectedAuction] = useState<AuctionDetails | null>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
@@ -133,149 +135,39 @@ export default function Component() {
   }
 
   return (
-    <div className="min-h-screen bg-white relative overflow-hidden">
-      {/* Smooth Floating Background Animation */}
-      <div className="fixed inset-0 overflow-hidden pointer-events-none">
-        {/* Large Floating Orbs */}
-        {Array.from({ length: 8 }).map((_, i) => (
-          <motion.div
-            key={`orb-${i}`}
-            className="absolute rounded-full bg-gradient-to-br from-black/5 via-black/10 to-black/5 blur-3xl"
-            style={{
-              width: `${200 + Math.random() * 300}px`,
-              height: `${200 + Math.random() * 300}px`,
-            }}
-            initial={{
-              x: Math.random() * window.innerWidth,
-              y: Math.random() * window.innerHeight,
-            }}
-            animate={{
-              x: [
-                null,
-                Math.random() * window.innerWidth,
-                Math.random() * window.innerWidth,
-                Math.random() * window.innerWidth,
-              ],
-              y: [
-                null,
-                Math.random() * window.innerHeight,
-                Math.random() * window.innerHeight,
-                Math.random() * window.innerHeight,
-              ],
-              scale: [1, 1.2, 0.8, 1],
-              opacity: [0.3, 0.6, 0.2, 0.4],
-            }}
-            transition={{
-              duration: 20 + Math.random() * 15,
-              repeat: Number.POSITIVE_INFINITY,
-              ease: "easeInOut",
-              delay: Math.random() * 10,
-            }}
-          />
-        ))}
-
-        {/* Medium Floating Circles */}
-        {Array.from({ length: 15 }).map((_, i) => (
-          <motion.div
-            key={`circle-${i}`}
-            className="absolute rounded-full bg-black/8 blur-2xl"
-            style={{
-              width: `${60 + Math.random() * 120}px`,
-              height: `${60 + Math.random() * 120}px`,
-            }}
-            initial={{
-              x: Math.random() * window.innerWidth,
-              y: Math.random() * window.innerHeight,
-            }}
-            animate={{
-              x: [null, Math.random() * window.innerWidth, Math.random() * window.innerWidth],
-              y: [null, Math.random() * window.innerHeight, Math.random() * window.innerHeight],
-              scale: [1, 1.5, 1],
-            }}
-            transition={{
-              duration: 15 + Math.random() * 10,
-              repeat: Number.POSITIVE_INFINITY,
-              ease: "easeInOut",
-              delay: Math.random() * 8,
-            }}
-          />
-        ))}
-
-        {/* Small Floating Dots */}
-        {Array.from({ length: 30 }).map((_, i) => (
-          <motion.div
-            key={`dot-${i}`}
-            className="absolute rounded-full bg-black/20"
-            style={{
-              width: `${4 + Math.random() * 8}px`,
-              height: `${4 + Math.random() * 8}px`,
-            }}
-            initial={{
-              x: Math.random() * window.innerWidth,
-              y: Math.random() * window.innerHeight,
-            }}
-            animate={{
-              x: [
-                null,
-                Math.random() * window.innerWidth,
-                Math.random() * window.innerWidth,
-                Math.random() * window.innerWidth,
-              ],
-              y: [
-                null,
-                Math.random() * window.innerHeight,
-                Math.random() * window.innerHeight,
-                Math.random() * window.innerHeight,
-              ],
-              opacity: [0.2, 0.8, 0.3, 0.6],
-            }}
-            transition={{
-              duration: 12 + Math.random() * 8,
-              repeat: Number.POSITIVE_INFINITY,
-              ease: "easeInOut",
-              delay: Math.random() * 6,
-            }}
-          />
-        ))}
-
-        {/* Smooth Gradient Overlay Animation */}
-        <motion.div
-          className="absolute inset-0 bg-gradient-to-br from-transparent via-black/2 to-transparent"
-          animate={{
-            background: [
-              "radial-gradient(circle at 20% 30%, rgba(0,0,0,0.03) 0%, transparent 50%)",
-              "radial-gradient(circle at 80% 70%, rgba(0,0,0,0.03) 0%, transparent 50%)",
-              "radial-gradient(circle at 40% 80%, rgba(0,0,0,0.03) 0%, transparent 50%)",
-              "radial-gradient(circle at 60% 20%, rgba(0,0,0,0.03) 0%, transparent 50%)",
-              "radial-gradient(circle at 20% 30%, rgba(0,0,0,0.03) 0%, transparent 50%)",
-            ],
-          }}
-          transition={{
-            duration: 25,
-            repeat: Number.POSITIVE_INFINITY,
-            ease: "easeInOut",
-          }}
-        />
-
-        {/* Subtle Mesh Pattern */}
-        <motion.div
-          className="absolute inset-0 opacity-5"
-          style={{
-            backgroundImage: `radial-gradient(circle at 1px 1px, black 1px, transparent 0)`,
-            backgroundSize: "40px 40px",
-          }}
-          animate={{
-            backgroundPosition: ["0px 0px", "40px 40px", "0px 0px"],
-          }}
-          transition={{
-            duration: 30,
-            repeat: Number.POSITIVE_INFINITY,
-            ease: "linear",
-          }}
+    <div className="min-h-screen bg-black text-white relative overflow-hidden">
+      {/* LiquidChrome Background */}
+      <div className="fixed inset-0 z-0">
+        <LiquidChrome
+          baseColor={[0.1, 0.1, 0.1]}
+          speed={0.05}
+          amplitude={0.6}
+          interactive={false}
         />
       </div>
 
-      <div className="relative z-10 max-w-7xl mx-auto p-8 pt-16">
+      {/* Back to Home Button */}
+      {onBackToHome && (
+        <motion.div
+          initial={{ opacity: 0, x: -20 }}
+          animate={{ opacity: 1, x: 0 }}
+          transition={{ duration: 0.6 }}
+          className="fixed top-8 left-8 z-50"
+        >
+          <Button
+            variant="outline"
+            size="sm"
+            className="border-white/20 text-white hover:bg-white/10 backdrop-blur-sm bg-transparent"
+            onClick={onBackToHome}
+          >
+            <ArrowLeft className="w-4 h-4 mr-2" />
+            Back to Home
+          </Button>
+        </motion.div>
+      )}
+
+      {/* Content Overlay */}
+      <div className="relative z-10 max-w-7xl mx-auto p-8 pt-24">
         {/* Stats Cards */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
@@ -338,7 +230,7 @@ export default function Component() {
                   className="absolute bottom-0 left-0 h-1 bg-gradient-to-r from-transparent via-black/20 to-transparent"
                   initial={{ width: 0 }}
                   animate={{ width: "100%" }}
-                  transition={{ delay: 0.5 + index * 0.1, duration: 0.8 }}
+                  transition={{ delay: 0.5 + index * 0.1, duration: 1 }}
                 />
               </div>
             </motion.div>
