@@ -38,6 +38,17 @@ interface Auction {
   totalAmount: number
   filled: number
   status: "active" | "ending" | "completed"
+  type: "normal" | "partial-fill"
+  segments?: AuctionSegment[]
+}
+
+interface AuctionSegment {
+  id: string
+  currentPrice: number
+  minPrice: number
+  filled: number
+  totalAmount: number
+  status: "active" | "ending" | "completed"
 }
 
 interface AuctionDetails extends Auction {
@@ -59,12 +70,15 @@ const generateMockAuctions = (): Auction[] => {
     { name: "Aave", symbol: "AAVE" },
   ]
 
-  return tokens.map((token, index) => {
+  const auctions: Auction[] = []
+
+  // Generate normal auctions (first 4 tokens)
+  tokens.slice(0, 4).forEach((token, index) => {
     const fromChain = Math.random() > 0.5 ? "Ethereum" : "Stellar"
     const toChain = fromChain === "Ethereum" ? "Stellar" : "Ethereum"
 
-    return {
-      id: `fusion-${index + 1}`,
+    auctions.push({
+      id: `fusion-normal-${index + 1}`,
       tokenName: token.name,
       tokenSymbol: token.symbol,
       fromChain,
@@ -77,8 +91,47 @@ const generateMockAuctions = (): Auction[] => {
       totalAmount: Math.floor(Math.random() * 10000) + 1000,
       filled: Math.floor(Math.random() * 5000),
       status: Math.random() > 0.7 ? "ending" : Math.random() > 0.3 ? "active" : "completed",
-    }
+      type: "normal"
+    })
   })
+
+  // Generate partial fill auctions (last 4 tokens)
+  tokens.slice(4, 8).forEach((token, index) => {
+    const fromChain = Math.random() > 0.5 ? "Ethereum" : "Stellar"
+    const toChain = fromChain === "Ethereum" ? "Stellar" : "Ethereum"
+    const baseAmount = Math.floor(Math.random() * 10000) + 1000
+    const segmentAmount = Math.floor(baseAmount / 4)
+
+    // Create 4 segments for partial fill
+    const segments: AuctionSegment[] = Array.from({ length: 4 }, (_, segIndex) => ({
+      id: `segment-${index + 1}-${segIndex + 1}`,
+      currentPrice: Math.random() * 8 + 2,
+      minPrice: Math.random() * 3 + 0.5,
+      filled: Math.floor(Math.random() * segmentAmount),
+      totalAmount: segmentAmount,
+      status: Math.random() > 0.7 ? "ending" : Math.random() > 0.3 ? "active" : "completed"
+    }))
+
+    auctions.push({
+      id: `fusion-partial-${index + 1}`,
+      tokenName: token.name,
+      tokenSymbol: token.symbol,
+      fromChain,
+      toChain,
+      startPrice: Math.random() * 10 + 5,
+      currentPrice: Math.random() * 8 + 2,
+      minPrice: Math.random() * 3 + 0.5,
+      endTime: Date.now() + Math.random() * 3600000,
+      resolver: `0x${Math.random().toString(16).substr(2, 8)}...${Math.random().toString(16).substr(2, 4)}`,
+      totalAmount: baseAmount,
+      filled: segments.reduce((sum, seg) => sum + seg.filled, 0),
+      status: Math.random() > 0.7 ? "ending" : Math.random() > 0.3 ? "active" : "completed",
+      type: "partial-fill",
+      segments
+    })
+  })
+
+  return auctions
 }
 
 export default function Component({ onBackToHome }: { onBackToHome?: () => void }) {
@@ -91,11 +144,29 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
   useEffect(() => {
     const interval = setInterval(() => {
       setAuctions((prev) =>
-        prev.map((auction) => ({
-          ...auction,
-          currentPrice: Math.max(auction.minPrice, auction.currentPrice - Math.random() * 0.05),
-          filled: Math.min(auction.totalAmount, auction.filled + Math.floor(Math.random() * 50)),
-        })),
+        prev.map((auction) => {
+          const updatedAuction = {
+            ...auction,
+            currentPrice: Math.max(auction.minPrice, auction.currentPrice - Math.random() * 0.05),
+          }
+
+          // Update segments for partial fill auctions
+          if (auction.type === "partial-fill" && auction.segments) {
+            const updatedSegments = auction.segments.map(segment => ({
+              ...segment,
+              currentPrice: Math.max(segment.minPrice, segment.currentPrice - Math.random() * 0.05),
+              filled: Math.min(segment.totalAmount, segment.filled + Math.floor(Math.random() * 10)),
+            }))
+            
+            updatedAuction.segments = updatedSegments
+            updatedAuction.filled = updatedSegments.reduce((sum, seg) => sum + seg.filled, 0)
+          } else {
+            // For normal auctions, update filled amount
+            updatedAuction.filled = Math.min(auction.totalAmount, auction.filled + Math.floor(Math.random() * 50))
+          }
+
+          return updatedAuction
+        }),
       )
     }, 3000)
 
@@ -273,6 +344,7 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
                 <TableHeader>
                   <TableRow className="border-white/30 hover:bg-transparent">
                     <TableHead className="font-semibold text-gray-700 border-white/20 py-4">Token & Route</TableHead>
+                    <TableHead className="font-semibold text-gray-700 border-white/20">Auction Type</TableHead>
                     <TableHead className="font-semibold text-gray-700 border-white/20">Current Price</TableHead>
                     <TableHead className="font-semibold text-gray-700 border-white/20">Min Price</TableHead>
                     <TableHead className="font-semibold text-gray-700 border-white/20">Progress</TableHead>
@@ -309,6 +381,15 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
                               </div>
                             </div>
                           </div>
+                        </TableCell>
+                        <TableCell className="border-white/20">
+                          <Badge className={`${
+                            auction.type === "normal" 
+                              ? "bg-blue-50/80 text-blue-700 border-blue-200/50" 
+                              : "bg-purple-50/80 text-purple-700 border-purple-200/50"
+                          } border font-medium backdrop-blur-sm`}>
+                            {auction.type === "normal" ? "NORMAL" : "PARTIAL FILL"}
+                          </Badge>
                         </TableCell>
                         <TableCell className="border-white/20">
                           <motion.div
@@ -428,7 +509,7 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
               {/* Content */}
               <div className="p-6 space-y-4">
                 {/* Price Cards */}
-                <div className="grid grid-cols-3 gap-3">
+                <div className="grid grid-cols-2 gap-3">
                   <div className="bg-white/50 backdrop-blur-xl border border-white/50 rounded-lg p-3">
                     <div className="flex items-center gap-1 mb-1">
                       <TrendingDown className="w-3 h-3 text-emerald-600" />
@@ -450,14 +531,6 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
                     </div>
                     <p className="text-lg font-bold text-black">${selectedAuction.minPrice.toFixed(4)}</p>
                   </div>
-
-                  <div className="bg-white/50 backdrop-blur-xl border border-white/50 rounded-lg p-3">
-                    <div className="flex items-center gap-1 mb-1">
-                      <DollarSign className="w-3 h-3 text-purple-600" />
-                      <span className="font-medium text-purple-800 text-xs">Fee</span>
-                    </div>
-                    <p className="text-lg font-bold text-black">{selectedAuction.swapFee.toFixed(2)}%</p>
-                  </div>
                 </div>
 
                 {/* Contract Details */}
@@ -467,22 +540,10 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
                     <h3 className="font-semibold text-black text-sm">Contract Details</h3>
                   </div>
 
-                  <div className="space-y-3">
-                    <div>
-                      <div className="text-xs text-gray-600 mb-1">Contract Address</div>
-                      <div className="p-2 bg-black/5 backdrop-blur-sm rounded-md border border-black/5">
-                        <p className="text-xs font-mono text-gray-800 break-all">{selectedAuction.contractAddress}</p>
-                      </div>
-                    </div>
-
-                    <div>
-                      <div className="text-xs text-gray-600 mb-1">Estimated Gas</div>
-                      <div className="p-2 bg-black/5 backdrop-blur-sm rounded-md border border-black/5 flex items-center gap-2">
-                        <Gas className="w-3 h-3 text-gray-600" />
-                        <p className="text-sm font-semibold text-gray-800">
-                          {selectedAuction.gasEstimate.toLocaleString()} units
-                        </p>
-                      </div>
+                  <div>
+                    <div className="text-xs text-gray-600 mb-1">Contract Address</div>
+                    <div className="p-2 bg-black/5 backdrop-blur-sm rounded-md border border-black/5">
+                      <p className="text-xs font-mono text-gray-800 break-all">{selectedAuction.contractAddress}</p>
                     </div>
                   </div>
                 </div>
@@ -495,6 +556,50 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
                   </h4>
                   <p className="text-gray-700 text-sm leading-relaxed">{selectedAuction.description}</p>
                 </div>
+
+                {/* Segments for Partial Fill Auctions */}
+                {selectedAuction.type === "partial-fill" && selectedAuction.segments && (
+                  <div className="bg-white/50 backdrop-blur-xl border border-white/50 rounded-lg p-4">
+                    <h4 className="font-semibold text-black text-sm mb-3 flex items-center gap-2">
+                      <Layers className="w-4 h-4 text-purple-500" />
+                      Auction Segments
+                    </h4>
+                    <div className="grid grid-cols-2 gap-3">
+                      {selectedAuction.segments.map((segment, index) => (
+                        <div key={segment.id} className="bg-black/5 backdrop-blur-sm rounded-lg p-3 border border-black/10">
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="text-xs font-medium text-gray-600">Segment {index + 1}</span>
+                            <Badge className={`${
+                              segment.status === "active" 
+                                ? "bg-green-50/80 text-green-700 border-green-200/50" 
+                                : segment.status === "ending"
+                                ? "bg-yellow-50/80 text-yellow-700 border-yellow-200/50"
+                                : "bg-gray-50/80 text-gray-700 border-gray-200/50"
+                            } text-xs`}>
+                              {segment.status.toUpperCase()}
+                            </Badge>
+                          </div>
+                          <div className="space-y-1">
+                            <div className="flex justify-between text-xs">
+                              <span className="text-gray-600">Current:</span>
+                              <span className="font-semibold text-black">${segment.currentPrice.toFixed(4)}</span>
+                            </div>
+                            <div className="flex justify-between text-xs">
+                              <span className="text-gray-600">Min:</span>
+                              <span className="font-semibold text-black">${segment.minPrice.toFixed(4)}</span>
+                            </div>
+                            <div className="flex justify-between text-xs">
+                              <span className="text-gray-600">Progress:</span>
+                              <span className="font-semibold text-black">
+                                {((segment.filled / segment.totalAmount) * 100).toFixed(0)}%
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {/* Action Button */}
                 <motion.div whileHover={{ y: -2 }} whileTap={{ y: 1 }}>
