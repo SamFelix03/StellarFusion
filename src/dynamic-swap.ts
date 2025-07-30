@@ -213,7 +213,9 @@ class DynamicSwapInterface {
       order.withdrawalStart,
       order.publicWithdrawalStart,
       order.cancellationStart,
-      order.publicCancellationStart
+      order.publicCancellationStart,
+      order.isPartialFillEnabled ? 0 : 0, // part index (0 for first part, whether partial or single)
+      order.isPartialFillEnabled && order.partialFillManager ? order.partialFillManager.getPartsCount() : 1 // total parts
     );
     
     if (!stellarSrcResult.success) {
@@ -230,7 +232,9 @@ class DynamicSwapInterface {
       config.destinationAmount,
       order.withdrawalStart,
       order.publicWithdrawalStart,
-      order.cancellationStart
+      order.cancellationStart,
+      order.isPartialFillEnabled ? 0 : 0, // part index (0 for first part, whether partial or single)
+      order.isPartialFillEnabled && order.partialFillManager ? order.partialFillManager.getPartsCount() : 1 // total parts
     );
     
     if (!stellarDstResult.success) {
@@ -250,19 +254,69 @@ class DynamicSwapInterface {
     
     // Step 6: Execute withdrawals
     console.log(`\n📝 Step 6: Execute Stellar source escrow withdrawal (resolver gets source tokens)`);
-    const srcWithdrawal = await this.withdrawFromStellarEscrow(
-      stellarSrcResult.escrowAddress || "",
-      order.secret,
-      stellarAddresses.resolver
-    );
+    
+    let srcWithdrawal;
+    if (order.isPartialFillEnabled && order.partialFillManager) {
+      // For partial fills, we need to use the first segment's proof
+      const segments = this.createPartialFillSegments(order, config);
+      if (segments.length > 0) {
+        const firstSegment = segments[0];
+        srcWithdrawal = await this.withdrawFromStellarEscrow(
+          stellarSrcResult.escrowAddress || "",
+          firstSegment.secret, // Use segment-specific secret
+          stellarAddresses.resolver,
+          firstSegment.proof, // Pass the merkle proof
+          true, // is partial fill
+          true // this is source escrow withdrawal
+        );
+      } else {
+        console.log("❌ No partial fill segments found");
+        return;
+      }
+    } else {
+      // For single fills, use the main order secret
+      srcWithdrawal = await this.withdrawFromStellarEscrow(
+        stellarSrcResult.escrowAddress || "",
+        order.secret,
+        stellarAddresses.resolver,
+        undefined, // no merkle proof for full fills
+        false, // not partial fill
+        true // this is source escrow withdrawal
+      );
+    }
     
     if (srcWithdrawal.success) {
       console.log(`\n📝 Step 7: Execute Stellar destination escrow withdrawal (buyer gets destination tokens)`);
-      const dstWithdrawal = await this.withdrawFromStellarEscrow(
-        stellarDstResult.escrowAddress || "",
-        order.secret,
-        stellarAddresses.resolver // Resolver calls withdrawal for buyer
-      );
+      
+      let dstWithdrawal;
+      if (order.isPartialFillEnabled && order.partialFillManager) {
+        // For partial fills, use the first segment's proof
+        const segments = this.createPartialFillSegments(order, config);
+        if (segments.length > 0) {
+          const firstSegment = segments[0];
+          dstWithdrawal = await this.withdrawFromStellarEscrow(
+            stellarDstResult.escrowAddress || "",
+            firstSegment.secret, // Use segment-specific secret
+            stellarAddresses.resolver, // Resolver calls withdrawal for buyer
+            firstSegment.proof, // Pass the merkle proof
+            true, // is partial fill
+            false // this is destination escrow withdrawal
+          );
+        } else {
+          console.log("❌ No partial fill segments found");
+          return;
+        }
+      } else {
+        // For single fills, use the main order secret
+        dstWithdrawal = await this.withdrawFromStellarEscrow(
+          stellarDstResult.escrowAddress || "",
+          order.secret,
+          stellarAddresses.resolver, // Resolver calls withdrawal for buyer
+          undefined, // no merkle proof for full fills
+          false, // not partial fill
+          false // this is destination escrow withdrawal
+        );
+      }
       
       if (dstWithdrawal.success) {
         console.log("\n🎉 STELLAR ↔ STELLAR SWAP COMPLETED SUCCESSFULLY!");
@@ -304,7 +358,9 @@ class DynamicSwapInterface {
       order.withdrawalStart,
       order.publicWithdrawalStart,
       order.cancellationStart,
-      order.publicCancellationStart
+      order.publicCancellationStart,
+      order.isPartialFillEnabled ? 0 : 0, // part index (0 for first part, whether partial or single)
+      order.isPartialFillEnabled && order.partialFillManager ? order.partialFillManager.getPartsCount() : 1 // total parts
     );
     
     if (!stellarSrcResult.success) {
@@ -320,7 +376,7 @@ class DynamicSwapInterface {
     const dstSigner = new ethers.Wallet(this.resolverPrivateKey, dstProvider);
     const buyerAddress = new ethers.Wallet(this.buyerPrivateKey).address;
     
-    await this.createEvmDestinationEscrow(config, order, dstSigner, buyerAddress);
+    const evmDstEscrowAddress = await this.createEvmDestinationEscrow(config, order, dstSigner, buyerAddress);
     
     // Step 4: Wait for withdrawal window and execute swaps
     console.log(`\n📝 Step 4: Wait for withdrawal window and execute swaps`);
@@ -336,16 +392,41 @@ class DynamicSwapInterface {
     
     // Step 5: Execute Stellar withdrawal first (resolver gets source tokens)
     console.log(`\n📝 Step 5: Execute Stellar source escrow withdrawal`);
-    const stellarWithdrawal = await this.withdrawFromStellarEscrow(
-      stellarSrcResult.escrowAddress || "",
-      order.secret,
-      stellarAddresses.resolver
-    );
+    
+    let stellarWithdrawal;
+    if (order.isPartialFillEnabled && order.partialFillManager) {
+      // For partial fills, we need to use the first segment's proof
+      const segments = this.createPartialFillSegments(order, config);
+      if (segments.length > 0) {
+        const firstSegment = segments[0];
+        stellarWithdrawal = await this.withdrawFromStellarEscrow(
+          stellarSrcResult.escrowAddress || "",
+          firstSegment.secret, // Use segment-specific secret
+          stellarAddresses.resolver,
+          firstSegment.proof, // Pass the merkle proof
+          true, // is partial fill
+          true // this is source escrow withdrawal (Stellar→EVM withdraws from src escrow on Stellar)
+        );
+      } else {
+        console.log("❌ No partial fill segments found");
+        return;
+      }
+    } else {
+      // For single fills, use the main order secret
+      stellarWithdrawal = await this.withdrawFromStellarEscrow(
+        stellarSrcResult.escrowAddress || "",
+        order.secret,
+        stellarAddresses.resolver,
+        undefined, // no merkle proof for full fills
+        false, // not partial fill
+        true // this is source escrow withdrawal (Stellar→EVM withdraws from src escrow on Stellar)
+      );
+    }
     
     if (stellarWithdrawal.success) {
       // Step 6: Execute EVM withdrawal (buyer gets destination tokens)
       console.log(`\n📝 Step 6: Execute EVM destination escrow withdrawal`);
-      await this.withdrawFromEvmEscrow("evm_dst_escrow_placeholder", order.secret, dstSigner);
+      await this.withdrawFromEvmEscrow(evmDstEscrowAddress, order.secret, dstSigner);
       
       console.log("\n🎉 CROSS-CHAIN SWAP COMPLETED SUCCESSFULLY!");
       console.log("==============================================");
@@ -400,7 +481,9 @@ class DynamicSwapInterface {
       config.destinationAmount,
       order.withdrawalStart,
       order.publicWithdrawalStart,
-      order.cancellationStart
+      order.cancellationStart,
+      order.isPartialFillEnabled ? 0 : 0, // part index (0 for first part, whether partial or single)
+      order.isPartialFillEnabled && order.partialFillManager ? order.partialFillManager.getPartsCount() : 1 // total parts
     );
     
     if (stellarResult.success) {
@@ -423,11 +506,36 @@ class DynamicSwapInterface {
       
       // Step 7: Execute Stellar withdrawal (buyer gets destination tokens)
       console.log(`\n📝 Step 7: Execute Stellar destination escrow withdrawal`);
-      const withdrawalResult = await this.withdrawFromStellarEscrow(
-        stellarResult.escrowAddress || "",
-        order.secret,
-        this.getStellarAddresses().resolver // RESOLVER calls the withdrawal, not buyer
-      );
+      
+      let withdrawalResult;
+      if (order.isPartialFillEnabled && order.partialFillManager) {
+        // For partial fills, we need to use the first segment's proof
+        const segments = this.createPartialFillSegments(order, config);
+        if (segments.length > 0) {
+          const firstSegment = segments[0];
+          withdrawalResult = await this.withdrawFromStellarEscrow(
+            stellarResult.escrowAddress || "",
+            firstSegment.secret, // Use segment-specific secret
+            this.getStellarAddresses().resolver, // RESOLVER calls the withdrawal, not buyer
+            firstSegment.proof, // Pass the merkle proof
+            true, // is partial fill
+            false // this is destination escrow withdrawal (EVM→Stellar creates dst escrow on Stellar)
+          );
+        } else {
+          console.log("❌ No partial fill segments found");
+          return;
+        }
+      } else {
+        // For single fills, use the main order secret
+        withdrawalResult = await this.withdrawFromStellarEscrow(
+          stellarResult.escrowAddress || "",
+          order.secret,
+          this.getStellarAddresses().resolver, // RESOLVER calls the withdrawal, not buyer
+          undefined, // no merkle proof for full fills
+          false, // not partial fill
+          false // this is destination escrow withdrawal (EVM→Stellar creates dst escrow on Stellar)
+        );
+      }
       
       if (withdrawalResult.success) {
         console.log("\n🎉 CROSS-CHAIN SWAP COMPLETED SUCCESSFULLY!");
@@ -453,14 +561,13 @@ class DynamicSwapInterface {
     amount: number,
     withdrawalStart: number,
     publicWithdrawalStart: number,
-    cancellationStart: number
+    cancellationStart: number,
+    partIndex?: number,
+    totalParts?: number
   ) {
     console.log(`\n🌟 Creating Stellar Destination Escrow...`);
     
     try {
-      if (!this.stellarResolverKeypair) {
-        throw new Error("Stellar resolver keypair not configured");
-      }
 
       const contractAddress = this.chains['stellar-testnet']?.factoryAddress;
       if (!contractAddress) {
@@ -470,6 +577,10 @@ class DynamicSwapInterface {
       // Convert amount to stroops (XLM has 7 decimals)
       const amountInStroops = Math.floor(amount * 10000000);
       
+      // Set default values for partial fill parameters
+      const actualPartIndex = partIndex || 0;
+      const actualTotalParts = totalParts || 1;
+      
       console.log("🔍 Debug - Parameters being passed:");
       console.log(`  creator: ${creator}`);
       console.log(`  hashed_secret: ${hashedSecret}`);
@@ -478,11 +589,23 @@ class DynamicSwapInterface {
       console.log(`  withdrawal_start: ${withdrawalStart}`);
       console.log(`  public_withdrawal_start: ${publicWithdrawalStart}`);
       console.log(`  cancellation_start: ${cancellationStart}`);
+      console.log(`  part_index: ${actualPartIndex}`);
+      console.log(`  total_parts: ${actualTotalParts}`);
       
       // Use CLI approach instead of SDK for better compatibility
       const { execSync } = require('child_process');
       
-      const command = `soroban contract invoke --id ${contractAddress} --source stellar-resolver --network testnet -- create_dst_escrow --creator ${creator} --hashed_secret ${hashedSecret.slice(2)} --recipient ${recipient} --token_amount ${amountInStroops} --withdrawal_start ${withdrawalStart} --public_withdrawal_start ${publicWithdrawalStart} --cancellation_start ${cancellationStart}`;
+      // Use separate partial fill function if needed, otherwise use regular function
+      const functionName = (actualPartIndex > 0 || actualTotalParts > 1) ? 'create_dst_escrow_partial' : 'create_dst_escrow';
+      
+      let command: string;
+      if (functionName === 'create_dst_escrow_partial') {
+        // Partial fill function with all parameters
+        command = `soroban contract invoke --id ${contractAddress} --source stellar-resolver --network testnet -- ${functionName} --creator ${creator} --hashed_secret ${hashedSecret.slice(2)} --recipient ${recipient} --token_amount ${amountInStroops} --withdrawal_start ${withdrawalStart} --public_withdrawal_start ${publicWithdrawalStart} --cancellation_start ${cancellationStart} --part_index ${actualPartIndex} --total_parts ${actualTotalParts}`;
+      } else {
+        // Regular function without partial fill parameters
+        command = `soroban contract invoke --id ${contractAddress} --source stellar-resolver --network testnet -- ${functionName} --creator ${creator} --hashed_secret ${hashedSecret.slice(2)} --recipient ${recipient} --token_amount ${amountInStroops} --withdrawal_start ${withdrawalStart} --public_withdrawal_start ${publicWithdrawalStart} --cancellation_start ${cancellationStart}`;
+      }
       
       console.log("📤 Executing CLI command...");
       console.log(`Command: ${command}`);
@@ -516,7 +639,9 @@ class DynamicSwapInterface {
     withdrawalStart: number,
     publicWithdrawalStart: number,
     cancellationStart: number,
-    publicCancellationStart: number
+    publicCancellationStart: number,
+    partIndex?: number,
+    totalParts?: number
   ) {
     console.log(`\n🌟 Creating Stellar Source Escrow...`);
     
@@ -529,6 +654,10 @@ class DynamicSwapInterface {
       const stellarAddresses = this.getStellarAddresses();
       const amountInStroops = Math.floor(amount * 10000000);
       
+      // Set default values for partial fill parameters
+      const actualPartIndex = partIndex || 0;
+      const actualTotalParts = totalParts || 1;
+      
       console.log("🔍 Debug - Parameters being passed:");
       console.log(`  creator: ${creator}`);
       console.log(`  hashed_secret: ${hashedSecret}`);
@@ -539,11 +668,23 @@ class DynamicSwapInterface {
       console.log(`  public_withdrawal_start: ${publicWithdrawalStart}`);
       console.log(`  cancellation_start: ${cancellationStart}`);
       console.log(`  public_cancellation_start: ${publicCancellationStart}`);
+      console.log(`  part_index: ${actualPartIndex}`);
+      console.log(`  total_parts: ${actualTotalParts}`);
       
       // Use CLI approach for better compatibility
       const { execSync } = require('child_process');
       
-      const command = `soroban contract invoke --id ${contractAddress} --source stellar-resolver --network testnet -- create_src_escrow --creator ${creator} --hashed_secret ${hashedSecret.slice(2)} --recipient ${recipient} --buyer ${stellarAddresses.buyer} --token_amount ${amountInStroops} --withdrawal_start ${withdrawalStart} --public_withdrawal_start ${publicWithdrawalStart} --cancellation_start ${cancellationStart} --public_cancellation_start ${publicCancellationStart}`;
+      // Use separate partial fill function if needed, otherwise use regular function
+      const functionName = (actualPartIndex > 0 || actualTotalParts > 1) ? 'create_src_escrow_partial' : 'create_src_escrow';
+      
+      let command: string;
+      if (functionName === 'create_src_escrow_partial') {
+        // Partial fill function with all parameters (note: no public_cancellation_start as we reduced params)
+        command = `soroban contract invoke --id ${contractAddress} --source stellar-resolver --network testnet -- ${functionName} --creator ${creator} --hashed_secret ${hashedSecret.slice(2)} --recipient ${recipient} --buyer ${stellarAddresses.buyer} --token_amount ${amountInStroops} --withdrawal_start ${withdrawalStart} --public_withdrawal_start ${publicWithdrawalStart} --cancellation_start ${cancellationStart} --part_index ${actualPartIndex} --total_parts ${actualTotalParts}`;
+      } else {
+        // Regular function without partial fill parameters
+        command = `soroban contract invoke --id ${contractAddress} --source stellar-resolver --network testnet -- ${functionName} --creator ${creator} --hashed_secret ${hashedSecret.slice(2)} --recipient ${recipient} --buyer ${stellarAddresses.buyer} --token_amount ${amountInStroops} --withdrawal_start ${withdrawalStart} --public_withdrawal_start ${publicWithdrawalStart} --cancellation_start ${cancellationStart} --public_cancellation_start ${publicCancellationStart}`;
+      }
       
       console.log("📤 Executing CLI command...");
       console.log(`Command: ${command}`);
@@ -572,7 +713,10 @@ class DynamicSwapInterface {
   private async withdrawFromStellarEscrow(
     escrowAddress: string,
     secret: string,
-    caller: string
+    caller: string,
+    merkleProof?: string[],
+    isPartialFill?: boolean,
+    isSourceEscrow?: boolean
   ) {
     console.log(`\n🌟 Withdrawing from Stellar Escrow...`);
     
@@ -580,26 +724,37 @@ class DynamicSwapInterface {
       const stellarAddresses = this.getStellarAddresses();
       const isResolver = caller === stellarAddresses.resolver;
       const sourceKey = isResolver ? 'stellar-resolver' : 'stellar-buyer';
-      
-      if (!this.stellarResolverKeypair && isResolver) {
-        throw new Error(`Stellar resolver keypair not configured for caller: ${caller}`);
-      }
-      if (!this.stellarBuyerKeypair && !isResolver) {
-        throw new Error(`Stellar buyer keypair not configured for caller: ${caller}`);
-      }
 
       const contractAddress = this.chains['stellar-testnet']?.factoryAddress;
       if (!contractAddress) {
         throw new Error("Stellar factory address not configured");
       }
 
-      // Determine if this is source or destination escrow withdrawal
-      const methodName = escrowAddress.includes('src') ? 'withdraw_src_escrow' : 'withdraw_dst_escrow';
+      // Determine method name based on escrow type and partial fill
+      const isSource = isSourceEscrow !== undefined ? isSourceEscrow : escrowAddress.includes('src');
+      let methodName = isSource ? 'withdraw_src_escrow' : 'withdraw_dst_escrow';
+      
+      // If partial fill, use the proof-based method
+      if (isPartialFill && merkleProof && merkleProof.length > 0) {
+        methodName = isSource ? 'withdraw_src_escrow_with_proof' : 'withdraw_dst_escrow_with_proof';
+      }
       
       // Use CLI approach for better compatibility
       const { execSync } = require('child_process');
       
-      const command = `soroban contract invoke --id ${contractAddress} --source ${sourceKey} --network testnet -- ${methodName} --caller ${caller} --escrow_address ${contractAddress} --secret ${secret.slice(2)}`;
+      let command: string;
+      if (isPartialFill && merkleProof && merkleProof.length > 0) {
+        // Convert merkle proof to CLI format - Soroban CLI expects JSON array format
+        // Format: --merkle_proof '[ "hex1", "hex2" ]' (with quotes around each element)
+        const proofArray = merkleProof.map(p => `"${p.slice(2)}"`); // Remove 0x prefix and add quotes
+        const proofStr = `[ ${proofArray.join(', ')} ]`;
+        command = `soroban contract invoke --id ${contractAddress} --source ${sourceKey} --network testnet -- ${methodName} --caller ${caller} --escrow_address ${escrowAddress} --secret ${secret.slice(2)} --merkle_proof '${proofStr}'`;
+        console.log(`🔍 Partial fill withdrawal with merkle proof (${merkleProof.length} elements)`);
+        console.log(`   Proof format: ${proofStr}`);
+      } else {
+        command = `soroban contract invoke --id ${contractAddress} --source ${sourceKey} --network testnet -- ${methodName} --caller ${caller} --escrow_address ${escrowAddress} --secret ${secret.slice(2)}`;
+        console.log(`🔍 Single fill withdrawal (no merkle proof needed)`);
+      }
       
       console.log("📤 Executing withdrawal CLI command...");
       console.log(`Command: ${command}`);
@@ -617,6 +772,64 @@ class DynamicSwapInterface {
       
     } catch (error) {
       console.error(`❌ Error withdrawing from Stellar escrow:`, error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error)
+      };
+    }
+  }
+
+  private async withdrawFromStellarEscrowPartial(
+    escrowAddress: string,
+    segment: PartialFillSegment,
+    caller: string,
+    isSourceEscrow?: boolean
+  ) {
+    console.log(`\n🌟 Withdrawing from Stellar Escrow (Partial Fill - Part ${segment.index})...`);
+    
+    try {
+      const stellarAddresses = this.getStellarAddresses();
+      const isResolver = caller === stellarAddresses.resolver;
+      const sourceKey = isResolver ? 'stellar-resolver' : 'stellar-buyer';
+
+      const contractAddress = this.chains['stellar-testnet']?.factoryAddress;
+      if (!contractAddress) {
+        throw new Error("Stellar factory address not configured");
+      }
+
+      // Determine method name based on escrow type
+      const isSource = isSourceEscrow !== undefined ? isSourceEscrow : escrowAddress.includes('src');
+      const methodName = isSource ? 'withdraw_src_escrow_with_proof' : 'withdraw_dst_escrow_with_proof';
+      
+      // Use CLI approach for better compatibility
+      const { execSync } = require('child_process');
+      
+      // Convert merkle proof to CLI format - Soroban CLI expects a specific format for Vec<BytesN<32>>
+      // Each proof element should be passed as a separate argument
+      const proofArgs = segment.proof.map(p => p.slice(2)).join(' ');
+      const command = `soroban contract invoke --id ${contractAddress} --source ${sourceKey} --network testnet -- ${methodName} --caller ${caller} --escrow_address ${escrowAddress} --secret ${segment.secret.slice(2)} --merkle_proof ${proofArgs}`;
+      
+      console.log(`🔍 Partial fill withdrawal for part ${segment.index}:`);
+      console.log(`   Secret: ${segment.secret.slice(0, 10)}...`);
+      console.log(`   Proof elements: ${segment.proof.length}`);
+      console.log(`   Leaf: ${segment.leaf}`);
+      
+      console.log("📤 Executing withdrawal CLI command...");
+      console.log(`Command: ${command}`);
+      
+      const result = execSync(command, { encoding: 'utf8' });
+      
+      console.log("✅ Stellar partial fill escrow withdrawal completed successfully!");
+      console.log(`📋 Result: ${result.trim()}`);
+      
+      return {
+        success: true,
+        transactionHash: 'CLI_SUCCESS',
+        message: `Partial fill withdrawal completed for part ${segment.index}`
+      };
+      
+    } catch (error) {
+      console.error(`❌ Error withdrawing from Stellar partial fill escrow:`, error);
       return {
         success: false,
         error: error instanceof Error ? error.message : String(error)
@@ -646,7 +859,7 @@ class DynamicSwapInterface {
     }
   }
 
-  private async createEvmDestinationEscrow(config: SwapConfig, order: Order, dstSigner: ethers.Wallet, buyerAddress: string) {
+  private async createEvmDestinationEscrow(config: SwapConfig, order: Order, dstSigner: ethers.Wallet, buyerAddress: string): Promise<string> {
     // Handle destination token preparation
     const dstTokenConfig = this.chains[config.destinationChain].tokens[config.destinationToken];
     let dstTokenAddress = order.dstToken;
@@ -713,6 +926,12 @@ class DynamicSwapInterface {
     
     const dstReceipt = await createDstEscrowTx.wait();
     console.log("✅ EVM destination escrow created:", dstReceipt.transactionHash);
+    
+    // Extract escrow address from receipt
+    const escrowAddress = this.extractEscrowAddressFromReceipt(dstReceipt);
+    console.log("📋 EVM destination escrow address:", escrowAddress);
+    
+    return escrowAddress;
   }
 
   async start() {
@@ -929,7 +1148,41 @@ class DynamicSwapInterface {
     
     if (isSrcStellar || isDstStellar) {
       console.log("🌟 Stellar chain detected - using Stellar integration");
-      await this.executeStellarSwap(config, isSrcStellar, isDstStellar);
+      
+      // Generate order with proper buyer address
+      const stellarAddresses = this.getStellarAddresses();
+      const buyerAddress = isSrcStellar ? stellarAddresses.buyer : 
+                          new ethers.Wallet(this.buyerPrivateKey).address;
+      const order = await this.createOrder(config, buyerAddress);
+      
+      console.log("\n📋 Order Details:");
+      console.log(`Order ID: ${order.orderId}`);
+      console.log(`Source Chain: ${config.sourceChain} ${isSrcStellar ? '(Stellar)' : '(EVM)'}`);
+      console.log(`Destination Chain: ${config.destinationChain} ${isDstStellar ? '(Stellar)' : '(EVM)'}`);
+      console.log(`Amount: ${config.sourceAmount} ${config.sourceToken} → ${config.destinationAmount} ${config.destinationToken}`);
+      console.log(`Secret: ${order.secret}`);
+      console.log(`Hashed Secret: ${order.hashedSecret}`);
+      
+      // Check if partial fills are enabled
+      if (order.isPartialFillEnabled) {
+        // Execute partial fill workflow for Stellar
+        await this.executePartialFillWorkflow(config, order);
+      } else {
+        // Execute single fill workflow for Stellar
+        if (isSrcStellar && isDstStellar) {
+          console.log("\n🔄 STELLAR ↔ STELLAR SWAP");
+          await this.executeStellarToStellarSwap(config, order);
+        } else if (isSrcStellar) {
+          console.log("\n🔄 STELLAR → EVM SWAP");
+          await this.executeStellarToEvmSwap(config, order);
+        } else if (isDstStellar) {
+          console.log("\n🔄 EVM → STELLAR SWAP");
+          await this.executeEvmToStellarSwap(config, order);
+        }
+      }
+      
+      console.log("\n🎉 Stellar Cross-Chain Swap Process Completed!");
+      console.log("==============================================");
       return;
     }
     
@@ -1101,7 +1354,106 @@ class DynamicSwapInterface {
     console.log("=========================");
     console.log(`Order will be filled in ${order.partialFillManager!.getPartsCount()} parts by the resolver`);
 
-    // Create segments
+    // Check if either chain is Stellar
+    const isSrcStellar = this.isStellarChain(config.sourceChain);
+    const isDstStellar = this.isStellarChain(config.destinationChain);
+    
+    if (isSrcStellar || isDstStellar) {
+      console.log("🌟 Stellar chain detected in partial fill workflow");
+      console.log("🔄 Implementing Stellar partial fill workflow...");
+      
+      // Create segments
+      const segments = this.createPartialFillSegments(order, config);
+      
+      // Create signers for EVM chains (if any)
+      const srcProvider = new ethers.providers.JsonRpcProvider(this.chains[config.sourceChain].rpcUrl);
+      const dstProvider = new ethers.providers.JsonRpcProvider(this.chains[config.destinationChain].rpcUrl);
+      const buyerSigner = new ethers.Wallet(this.buyerPrivateKey, srcProvider);
+      const resolverSigner = new ethers.Wallet(this.resolverPrivateKey, srcProvider);
+      const dstSigner = new ethers.Wallet(this.resolverPrivateKey, dstProvider);
+
+      // Step 1: Buyer preparation (full amount approval)
+      console.log("\n📋 STEP 1: Buyer Preparation (Full Amount Approval)");
+      console.log("----------------------------------------------------");
+      if (isSrcStellar) {
+        await this.prepareStellarBuyer(config, order);
+      } else {
+        await this.prepareBuyer(config, buyerSigner, order);
+      }
+
+      // Step 2: Resolver fills the order in parts
+      console.log("\n🔄 STEP 2: Resolver Executes Partial Fills");
+      console.log("-------------------------------------------");
+      
+      let totalFilled = ethers.BigNumber.from(0);
+      let fillStatus = {
+        totalParts: segments.length,
+        completedParts: 0,
+        remainingParts: segments.length,
+        totalFilledAmount: totalFilled,
+        percentageComplete: 0
+      };
+
+      for (let i = 0; i < segments.length; i++) {
+        const segment = segments[i];
+        console.log(`\n🎯 Filling Part ${i + 1}/${segments.length} (${segment.percentage.toFixed(1)}%)`);
+        console.log(`   Amount: ${ethers.utils.formatUnits(segment.srcAmount, this.chains[config.sourceChain].tokens[config.sourceToken].decimals)} ${config.sourceToken}`);
+        console.log(`   Secret: ${segment.secret}`);
+        console.log(`   Leaf: ${segment.leaf}`);
+        console.log(`   Proof length: ${segment.proof.length}`);
+
+        try {
+          // Create and execute partial escrows for this segment
+          if (isSrcStellar && isDstStellar) {
+            await this.createAndExecuteStellarPartialEscrowPair(config, order, segment);
+          } else if (isSrcStellar) {
+            await this.createAndExecuteStellarToEvmPartialEscrowPair(config, order, segment, dstSigner, buyerSigner.address);
+          } else if (isDstStellar) {
+            await this.createAndExecuteEvmToStellarPartialEscrowPair(config, order, segment, resolverSigner, dstSigner, buyerSigner.address);
+          } else {
+            // EVM to EVM (existing logic)
+            await this.createAndExecutePartialEscrowPair(config, order, segment, resolverSigner, dstSigner, buyerSigner.address);
+          }
+          
+          // Update tracking
+          segment.filled = true;
+          totalFilled = totalFilled.add(segment.srcAmount);
+          fillStatus.completedParts++;
+          fillStatus.remainingParts--;
+          fillStatus.totalFilledAmount = totalFilled;
+          fillStatus.percentageComplete = (fillStatus.completedParts / fillStatus.totalParts) * 100;
+
+          // Display current status
+          this.displayPartialFillStatus(config, order, fillStatus);
+
+          console.log(`✅ Part ${i + 1} completed successfully!`);
+          
+          // Mark in order tracking
+          if (order.filledParts) {
+            order.filledParts[i] = true;
+          }
+
+        } catch (error) {
+          console.error(`❌ Error filling part ${i + 1}:`, error);
+          break;
+        }
+
+        // Wait between fills (for demo purposes)
+        if (i < segments.length - 1) {
+          console.log("⏳ Waiting 5 seconds before next fill...");
+          await new Promise(resolve => setTimeout(resolve, 5000));
+        }
+      }
+
+      console.log("\n🎉 PARTIAL FILL WORKFLOW COMPLETED!");
+      console.log("====================================");
+      console.log(`✅ Order filled: ${fillStatus.completedParts}/${fillStatus.totalParts} parts (${fillStatus.percentageComplete.toFixed(1)}%)`);
+      console.log(`✅ Total filled: ${ethers.utils.formatUnits(fillStatus.totalFilledAmount, this.chains[config.sourceChain].tokens[config.sourceToken].decimals)} ${config.sourceToken}`);
+      
+      return;
+    }
+
+    // Original EVM-only logic (unchanged)
     const segments = this.createPartialFillSegments(order, config);
     
     // Create signers
@@ -1282,7 +1634,7 @@ class DynamicSwapInterface {
     
     if (timeToWait > 0) {
       console.log(`   Need to wait ${timeToWait} seconds...`);
-      const skipWaiting = await inquirer.prompt([
+      const { skipWaiting } = await inquirer.prompt([
         {
           type: 'input',
           name: 'skipWaiting',
@@ -1724,6 +2076,401 @@ class DynamicSwapInterface {
     console.log("✅ Destination escrow withdrawal completed");
     
     console.log("✅ Swap execution completed successfully!");
+  }
+
+  private async createAndExecuteStellarPartialEscrowPair(
+    config: SwapConfig,
+    order: Order,
+    segment: PartialFillSegment
+  ) {
+    console.log(`🏗️ Creating Stellar escrow pair for part ${segment.index}`);
+    
+    const stellarAddresses = this.getStellarAddresses();
+    const srcAmount = parseFloat(ethers.utils.formatUnits(segment.srcAmount, this.chains[config.sourceChain].tokens[config.sourceToken].decimals));
+    const dstAmount = parseFloat(ethers.utils.formatUnits(segment.dstAmount, this.chains[config.destinationChain].tokens[config.destinationToken].decimals));
+    const srcAmountInStroops = Math.floor(srcAmount * 10000000);
+    const dstAmountInStroops = Math.floor(dstAmount * 10000000);
+    
+    console.log(`   Source amount: ${srcAmount} ${config.sourceToken} (${srcAmountInStroops} stroops)`);
+    console.log(`   Destination amount: ${dstAmount} ${config.destinationToken} (${dstAmountInStroops} stroops)`);
+    console.log(`   Secret: ${segment.secret}`);
+    console.log(`   Proof elements: ${segment.proof.length}`);
+
+    // Create source escrow on Stellar
+    console.log(`\n📝 Creating Stellar source escrow for part ${segment.index}`);
+    const stellarSrcResult = await this.createStellarSourceEscrow(
+      stellarAddresses.resolver, // creator (resolver)
+      stellarAddresses.resolver, // recipient (resolver)
+      order.hashedSecret,
+      srcAmount,
+      order.withdrawalStart,
+      order.publicWithdrawalStart,
+      order.cancellationStart,
+      order.publicCancellationStart,
+      segment.index, // part index
+      order.partialFillManager!.getPartsCount() // total parts
+    );
+    
+    if (!stellarSrcResult.success) {
+      throw new Error(`Stellar source escrow creation failed: ${stellarSrcResult.error}`);
+    }
+    
+    // Create destination escrow on Stellar
+    console.log(`\n📝 Creating Stellar destination escrow for part ${segment.index}`);
+    const stellarDstResult = await this.createStellarDestinationEscrow(
+      stellarAddresses.resolver, // creator (resolver)
+      stellarAddresses.buyer, // recipient (buyer)
+      order.hashedSecret,
+      dstAmount,
+      order.withdrawalStart,
+      order.publicWithdrawalStart,
+      order.cancellationStart,
+      segment.index, // part index
+      order.partialFillManager!.getPartsCount() // total parts
+    );
+    
+    if (!stellarDstResult.success) {
+      throw new Error(`Stellar destination escrow creation failed: ${stellarDstResult.error}`);
+    }
+
+    // Store addresses in segment for tracking
+    segment.srcEscrowAddress = stellarSrcResult.escrowAddress;
+    segment.dstEscrowAddress = stellarDstResult.escrowAddress;
+
+    // Wait for withdrawal window
+    console.log("⏳ Waiting for withdrawal window...");
+    const currentTime = Math.floor(Date.now() / 1000);
+    const timeToWait = order.withdrawalStart - currentTime;
+    
+    if (timeToWait > 0) {
+      console.log(`   Need to wait ${timeToWait} seconds...`);
+      const { skipWaiting } = await inquirer.prompt([
+        {
+          type: 'input',
+          name: 'skipWaiting',
+          message: 'Skip waiting? (y/n): '
+        }
+      ]);
+      
+      if (skipWaiting.toLowerCase() === 'y' || skipWaiting.toLowerCase() === 'yes') {
+        console.log("🚀 Skipping withdrawal timelock for demo purposes");
+      } else {
+        console.log(`   Waiting ${timeToWait} seconds...`);
+        await new Promise(resolve => setTimeout(resolve, timeToWait * 1000));
+      }
+    }
+
+    // Execute withdrawals with merkle proofs
+    console.log(`🔓 Executing Stellar withdrawals with merkle proof for part ${segment.index}...`);
+    await this.executeStellarPartialWithdrawals(segment);
+  }
+
+  private async createAndExecuteStellarToEvmPartialEscrowPair(
+    config: SwapConfig,
+    order: Order,
+    segment: PartialFillSegment,
+    dstSigner: ethers.Wallet,
+    buyerAddress: string
+  ) {
+    console.log(`🏗️ Creating Stellar→EVM escrow pair for part ${segment.index}`);
+    
+    const stellarAddresses = this.getStellarAddresses();
+    const srcAmount = parseFloat(ethers.utils.formatUnits(segment.srcAmount, this.chains[config.sourceChain].tokens[config.sourceToken].decimals));
+    const srcAmountInStroops = Math.floor(srcAmount * 10000000);
+    
+    console.log(`   Source amount: ${srcAmount} ${config.sourceToken} (${srcAmountInStroops} stroops)`);
+    console.log(`   Destination amount: ${ethers.utils.formatUnits(segment.dstAmount, this.chains[config.destinationChain].tokens[config.destinationToken].decimals)} ${config.destinationToken}`);
+    console.log(`   Secret: ${segment.secret}`);
+    console.log(`   Proof elements: ${segment.proof.length}`);
+
+    // Create source escrow on Stellar
+    console.log(`\n📝 Creating Stellar source escrow for part ${segment.index}`);
+    const stellarSrcResult = await this.createStellarSourceEscrow(
+      stellarAddresses.resolver, // creator (resolver)
+      stellarAddresses.resolver, // recipient (resolver)
+      order.hashedSecret,
+      srcAmount,
+      order.withdrawalStart,
+      order.publicWithdrawalStart,
+      order.cancellationStart,
+      order.publicCancellationStart,
+      segment.index, // part index
+      order.partialFillManager!.getPartsCount() // total parts
+    );
+    
+    if (!stellarSrcResult.success) {
+      throw new Error(`Stellar source escrow creation failed: ${stellarSrcResult.error}`);
+    }
+
+    // Prepare destination tokens if needed
+    await this.prepareDestinationTokens(config, dstSigner, segment.dstAmount);
+
+    // Create destination escrow on EVM
+    console.log(`\n📝 Creating EVM destination escrow for part ${segment.index}`);
+    const dstFactoryAddress = this.chains[config.destinationChain].factoryAddress;
+    const dstFactoryContract = new ethers.Contract(dstFactoryAddress, factoryABI, dstSigner);
+    
+    const createDstTx = await dstFactoryContract.createDstEscrow(
+      order.hashedSecret,
+      buyerAddress, // recipient (buyer)
+      segment.dstAmount,
+      order.withdrawalStart,
+      order.publicWithdrawalStart,
+      order.cancellationStart,
+      segment.index, // partIndex
+      order.partialFillManager!.getPartsCount(), // totalParts
+      { value: ethers.utils.parseEther("0.001") }
+    );
+    
+    const dstReceipt = await createDstTx.wait();
+    console.log(`✅ EVM destination escrow created: ${dstReceipt.transactionHash}`);
+
+    // Extract destination escrow address
+    const dstEscrowAddress = this.extractEscrowAddressFromReceipt(dstReceipt);
+
+    // Store addresses in segment for tracking
+    segment.srcEscrowAddress = stellarSrcResult.escrowAddress;
+    segment.dstEscrowAddress = dstEscrowAddress;
+
+    // Wait for withdrawal window
+    console.log("⏳ Waiting for withdrawal window...");
+    const currentTime = Math.floor(Date.now() / 1000);
+    const timeToWait = order.withdrawalStart - currentTime;
+    
+    if (timeToWait > 0) {
+      console.log(`   Need to wait ${timeToWait} seconds...`);
+      const { skipWaiting } = await inquirer.prompt([
+        {
+          type: 'input',
+          name: 'skipWaiting',
+          message: 'Skip waiting? (y/n): '
+        }
+      ]);
+      
+      if (skipWaiting.toLowerCase() === 'y' || skipWaiting.toLowerCase() === 'yes') {
+        console.log("🚀 Skipping withdrawal timelock for demo purposes");
+      } else {
+        console.log(`   Waiting ${timeToWait} seconds...`);
+        await new Promise(resolve => setTimeout(resolve, timeToWait * 1000));
+      }
+    }
+
+    // Execute withdrawals with merkle proofs
+    console.log(`🔓 Executing Stellar→EVM withdrawals with merkle proof for part ${segment.index}...`);
+    await this.executeStellarToEvmPartialWithdrawals(segment, dstSigner);
+  }
+
+  private async createAndExecuteEvmToStellarPartialEscrowPair(
+    config: SwapConfig,
+    order: Order,
+    segment: PartialFillSegment,
+    resolverSigner: ethers.Wallet,
+    dstSigner: ethers.Wallet,
+    buyerAddress: string
+  ) {
+    console.log(`🏗️ Creating EVM→Stellar escrow pair for part ${segment.index}`);
+    
+    const stellarAddresses = this.getStellarAddresses();
+    const dstAmount = parseFloat(ethers.utils.formatUnits(segment.dstAmount, this.chains[config.destinationChain].tokens[config.destinationToken].decimals));
+    const dstAmountInStroops = Math.floor(dstAmount * 10000000);
+    
+    console.log(`   Source amount: ${ethers.utils.formatUnits(segment.srcAmount, this.chains[config.sourceChain].tokens[config.sourceToken].decimals)} ${config.sourceToken}`);
+    console.log(`   Destination amount: ${dstAmount} ${config.destinationToken} (${dstAmountInStroops} stroops)`);
+    console.log(`   Secret: ${segment.secret}`);
+    console.log(`   Proof elements: ${segment.proof.length}`);
+
+    // Create source escrow on EVM
+    console.log(`\n📝 Creating EVM source escrow for part ${segment.index}`);
+    const srcFactoryAddress = this.chains[config.sourceChain].factoryAddress;
+    const srcFactoryContract = new ethers.Contract(srcFactoryAddress, factoryABI, resolverSigner);
+    
+    const createSrcTx = await srcFactoryContract.createSrcEscrow(
+      order.hashedSecret,
+      resolverSigner.address, // recipient is resolver
+      buyerAddress, // buyer provides the tokens
+      segment.srcAmount,
+      order.withdrawalStart,
+      order.publicWithdrawalStart,
+      order.cancellationStart,
+      order.publicCancellationStart,
+      segment.index, // partIndex
+      order.partialFillManager!.getPartsCount(), // totalParts
+      { value: ethers.utils.parseEther("0.001") }
+    );
+    
+    const srcReceipt = await createSrcTx.wait();
+    console.log(`✅ EVM source escrow created: ${srcReceipt.transactionHash}`);
+
+    // Extract source escrow address
+    const srcEscrowAddress = this.extractEscrowAddressFromReceipt(srcReceipt);
+
+    // Create destination escrow on Stellar
+    console.log(`\n📝 Creating Stellar destination escrow for part ${segment.index}`);
+    const stellarDstResult = await this.createStellarDestinationEscrow(
+      stellarAddresses.resolver, // creator (resolver)
+      stellarAddresses.buyer, // recipient (buyer)
+      order.hashedSecret,
+      dstAmount,
+      order.withdrawalStart,
+      order.publicWithdrawalStart,
+      order.cancellationStart,
+      segment.index, // part index
+      order.partialFillManager!.getPartsCount() // total parts
+    );
+    
+    if (!stellarDstResult.success) {
+      throw new Error(`Stellar destination escrow creation failed: ${stellarDstResult.error}`);
+    }
+
+    // Store addresses in segment for tracking
+    segment.srcEscrowAddress = srcEscrowAddress;
+    segment.dstEscrowAddress = stellarDstResult.escrowAddress;
+
+    // Wait for withdrawal window
+    console.log("⏳ Waiting for withdrawal window...");
+    const currentTime = Math.floor(Date.now() / 1000);
+    const timeToWait = order.withdrawalStart - currentTime;
+    
+    if (timeToWait > 0) {
+      console.log(`   Need to wait ${timeToWait} seconds...`);
+      const { skipWaiting } = await inquirer.prompt([
+        {
+          type: 'input',
+          name: 'skipWaiting',
+          message: 'Skip waiting? (y/n): '
+        }
+      ]);
+      
+      if (skipWaiting.toLowerCase() === 'y' || skipWaiting.toLowerCase() === 'yes') {
+        console.log("🚀 Skipping withdrawal timelock for demo purposes");
+      } else {
+        console.log(`   Waiting ${timeToWait} seconds...`);
+        await new Promise(resolve => setTimeout(resolve, timeToWait * 1000));
+      }
+    }
+
+    // Execute withdrawals with merkle proofs
+    console.log(`🔓 Executing EVM→Stellar withdrawals with merkle proof for part ${segment.index}...`);
+    await this.executeEvmToStellarPartialWithdrawals(segment, resolverSigner);
+  }
+
+  private async executeStellarPartialWithdrawals(segment: PartialFillSegment) {
+    console.log(`🔐 Withdrawing from Stellar escrows with secret ${segment.index} and merkle proof`);
+    console.log(`   Secret: ${segment.secret.slice(0, 10)}...`);
+    console.log(`   Proof elements: ${segment.proof.length}`);
+    console.log(`   Source escrow: ${segment.srcEscrowAddress}`);
+    console.log(`   Destination escrow: ${segment.dstEscrowAddress}`);
+
+    const stellarAddresses = this.getStellarAddresses();
+
+    // Withdraw from source escrow (resolver gets tokens)
+    console.log("   📤 Withdrawing from Stellar source escrow (resolver receives tokens)...");
+    const srcWithdrawal = await this.withdrawFromStellarEscrow(
+      segment.srcEscrowAddress!,
+      segment.secret,
+      stellarAddresses.resolver,
+      segment.proof,
+      true, // is partial fill
+      true // is source escrow
+    );
+
+    if (!srcWithdrawal.success) {
+      throw new Error(`Stellar source withdrawal failed: ${srcWithdrawal.error}`);
+    }
+
+    // Withdraw from destination escrow (buyer gets tokens)
+    console.log("   📤 Withdrawing from Stellar destination escrow (buyer receives tokens)...");
+    const dstWithdrawal = await this.withdrawFromStellarEscrow(
+      segment.dstEscrowAddress!,
+      segment.secret,
+      stellarAddresses.resolver, // resolver calls withdrawal for buyer
+      segment.proof,
+      true, // is partial fill
+      false // is destination escrow
+    );
+
+    if (!dstWithdrawal.success) {
+      throw new Error(`Stellar destination withdrawal failed: ${dstWithdrawal.error}`);
+    }
+
+    console.log(`   ✅ Stellar partial withdrawals completed for part ${segment.index}`);
+  }
+
+  private async executeStellarToEvmPartialWithdrawals(segment: PartialFillSegment, dstSigner: ethers.Wallet) {
+    console.log(`🔐 Withdrawing from Stellar→EVM escrows with secret ${segment.index} and merkle proof`);
+    console.log(`   Secret: ${segment.secret.slice(0, 10)}...`);
+    console.log(`   Proof elements: ${segment.proof.length}`);
+    console.log(`   Source escrow: ${segment.srcEscrowAddress}`);
+    console.log(`   Destination escrow: ${segment.dstEscrowAddress}`);
+
+    const stellarAddresses = this.getStellarAddresses();
+
+    // Withdraw from Stellar source escrow (resolver gets tokens)
+    console.log("   📤 Withdrawing from Stellar source escrow (resolver receives tokens)...");
+    const srcWithdrawal = await this.withdrawFromStellarEscrow(
+      segment.srcEscrowAddress!,
+      segment.secret,
+      stellarAddresses.resolver,
+      segment.proof,
+      true, // is partial fill
+      true // is source escrow
+    );
+
+    if (!srcWithdrawal.success) {
+      throw new Error(`Stellar source withdrawal failed: ${srcWithdrawal.error}`);
+    }
+
+    // Withdraw from EVM destination escrow (buyer gets tokens)
+    console.log("   📤 Withdrawing from EVM destination escrow (buyer receives tokens)...");
+    const dstEscrowContract = new ethers.Contract(segment.dstEscrowAddress!, enhancedEscrowABI, dstSigner);
+    
+    const dstWithdrawTx = await dstEscrowContract.withdrawWithProof(segment.secret, segment.proof, {
+      gasLimit: 500000,
+      gasPrice: ethers.utils.parseUnits("2", "gwei")
+    });
+    await dstWithdrawTx.wait();
+    console.log(`   ✅ EVM destination withdrawal completed: ${dstWithdrawTx.hash}`);
+
+    console.log(`   ✅ Stellar→EVM partial withdrawals completed for part ${segment.index}`);
+  }
+
+  private async executeEvmToStellarPartialWithdrawals(segment: PartialFillSegment, resolverSigner: ethers.Wallet) {
+    console.log(`🔐 Withdrawing from EVM→Stellar escrows with secret ${segment.index} and merkle proof`);
+    console.log(`   Secret: ${segment.secret.slice(0, 10)}...`);
+    console.log(`   Proof elements: ${segment.proof.length}`);
+    console.log(`   Source escrow: ${segment.srcEscrowAddress}`);
+    console.log(`   Destination escrow: ${segment.dstEscrowAddress}`);
+
+    const stellarAddresses = this.getStellarAddresses();
+
+    // Withdraw from EVM source escrow (resolver gets tokens)
+    console.log("   📤 Withdrawing from EVM source escrow (resolver receives tokens)...");
+    const srcEscrowContract = new ethers.Contract(segment.srcEscrowAddress!, enhancedEscrowABI, resolverSigner);
+    
+    const srcWithdrawTx = await srcEscrowContract.withdrawWithProof(segment.secret, segment.proof, {
+      gasLimit: 500000,
+      maxFeePerGas: ethers.utils.parseUnits("15", "gwei"),
+      maxPriorityFeePerGas: ethers.utils.parseUnits("1", "gwei")
+    });
+    await srcWithdrawTx.wait();
+    console.log(`   ✅ EVM source withdrawal completed: ${srcWithdrawTx.hash}`);
+
+    // Withdraw from Stellar destination escrow (buyer gets tokens)
+    console.log("   📤 Withdrawing from Stellar destination escrow (buyer receives tokens)...");
+    const dstWithdrawal = await this.withdrawFromStellarEscrow(
+      segment.dstEscrowAddress!,
+      segment.secret,
+      stellarAddresses.resolver, // resolver calls withdrawal for buyer
+      segment.proof,
+      true, // is partial fill
+      false // is destination escrow
+    );
+
+    if (!dstWithdrawal.success) {
+      throw new Error(`Stellar destination withdrawal failed: ${dstWithdrawal.error}`);
+    }
+
+    console.log(`   ✅ EVM→Stellar partial withdrawals completed for part ${segment.index}`);
   }
 }
 

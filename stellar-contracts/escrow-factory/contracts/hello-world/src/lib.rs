@@ -26,6 +26,10 @@ pub struct SourceEscrowData {
     pub public_cancellation_start: u64,
     pub funds_withdrawn: bool,
     pub cancelled: bool,
+    // Partial fill support
+    pub part_index: u64,
+    pub total_parts: u32,
+    pub is_partial_fill: bool,
 }
 
 #[contracttype]
@@ -42,6 +46,19 @@ pub struct DestinationEscrowData {
     pub cancellation_start: u64,
     pub funds_withdrawn: bool,
     pub cancelled: bool,
+    // Partial fill support
+    pub part_index: u64,
+    pub total_parts: u32,
+    pub is_partial_fill: bool,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TimeWindows {
+    pub withdrawal_start: u64,
+    pub public_withdrawal_start: u64,
+    pub cancellation_start: u64,
+    pub public_cancellation_start: u64,
 }
 
 #[contracttype]
@@ -54,10 +71,94 @@ pub enum DataKey {
     EscrowCounter,
     // Add authorization storage - equivalent to EVM's allowances mapping
     TokenAllowance(Address, Address), // (token_owner, spender) -> amount
+    // Partial fill tracking - equivalent to EVM mappings
+    PartialFillsUsed(BytesN<32>, u64), // (hashLock, index) -> bool
+    PartialFillsCount(BytesN<32>), // hashLock -> count
+    LastUsedIndex(BytesN<32>), // hashLock -> last used index
 }
 
 #[contract]
 pub struct HashLockedEscrowFactory;
+
+// Helper functions for partial fill support
+impl HashLockedEscrowFactory {
+    /// Generate merkle leaf - equivalent to PartialFillHelper.generateLeaf in EVM
+    fn generate_leaf(env: &Env, index: u64, secret_hash: &BytesN<32>) -> BytesN<32> {
+        // Pack index (8 bytes big endian) + secret hash (32 bytes) and hash with SHA256
+        let mut packed = Bytes::new(env);
+        
+        // Convert index to 8-byte big endian representation
+        let index_bytes = index.to_be_bytes();
+        for byte in index_bytes.iter() {
+            packed.push_back(*byte);
+        }
+        
+        // Append secret hash bytes
+        for i in 0..32 {
+            packed.push_back(secret_hash.get(i).unwrap());
+        }
+        
+        // Hash the packed data with SHA256
+        let hash = env.crypto().sha256(&packed);
+        BytesN::from_array(env, &hash.to_array())
+    }
+    
+    /// Verify merkle proof - equivalent to MerkleProof.verify in EVM
+    fn verify_merkle_proof(env: &Env, proof: &Vec<BytesN<32>>, root: &BytesN<32>, leaf: &BytesN<32>) -> bool {
+        let mut computed_hash = leaf.clone();
+        
+        for i in 0..proof.len() {
+            let proof_element = proof.get(i).unwrap();
+            
+            // Sort hashes for consistent ordering (same as Solidity)
+            if computed_hash <= proof_element {
+                computed_hash = Self::hash_pair(env, &computed_hash, &proof_element);
+            } else {
+                computed_hash = Self::hash_pair(env, &proof_element, &computed_hash);
+            }
+        }
+        
+        computed_hash == *root
+    }
+    
+    /// Hash two elements together - helper for merkle proof verification
+    fn hash_pair(env: &Env, a: &BytesN<32>, b: &BytesN<32>) -> BytesN<32> {
+        let mut concat = Bytes::new(env);
+        
+        // Append first hash
+        for i in 0..32 {
+            concat.push_back(a.get(i).unwrap());
+        }
+        
+        // Append second hash
+        for i in 0..32 {
+            concat.push_back(b.get(i).unwrap());
+        }
+        
+        // Hash the concatenated data with SHA256
+        let hash = env.crypto().sha256(&concat);
+        BytesN::from_array(env, &hash.to_array())
+    }
+    
+    /// Validate secret index order - equivalent to validateSecretIndex in EVM
+    fn validate_secret_index(env: &Env, hash_lock: &BytesN<32>, secret_index: u64) -> bool {
+        let fills_count: u64 = env.storage()
+            .persistent()
+            .get(&DataKey::PartialFillsCount(hash_lock.clone()))
+            .unwrap_or(0);
+            
+        if fills_count == 0 {
+            return secret_index == 0; // First secret must be index 0
+        }
+        
+        let last_used: u64 = env.storage()
+            .persistent()
+            .get(&DataKey::LastUsedIndex(hash_lock.clone()))
+            .unwrap_or(0);
+            
+        secret_index == last_used + 1
+    }
+}
 
 #[contractimpl]
 impl HashLockedEscrowFactory {
@@ -90,7 +191,7 @@ impl HashLockedEscrowFactory {
             .unwrap_or(0)
     }
 
-    /// Create a source escrow (equivalent to createSrcEscrow in EVM)
+    /// Create a source escrow (equivalent to createSrcEscrow in EVM) - full fill only
     /// This function requires authorization from both creator (resolver) and buyer
     pub fn create_src_escrow(
         env: Env,
@@ -142,7 +243,7 @@ impl HashLockedEscrowFactory {
         // Uniqueness is achieved through the counter and storage key system
         let final_addr = env.current_contract_address();
 
-        // Create escrow data
+        // Create escrow data (full fill only - no partial fill logic)
         let escrow_data = SourceEscrowData {
             creator: buyer.clone(), // Use buyer as creator (matches EVM logic)
             recipient: recipient.clone(),
@@ -156,6 +257,10 @@ impl HashLockedEscrowFactory {
             public_cancellation_start,
             funds_withdrawn: false,
             cancelled: false,
+            // Default values for compatibility (full fill = part 0 of 1)
+            part_index: 0,
+            total_parts: 1,
+            is_partial_fill: false,
         };
 
         // Store escrow data
@@ -184,7 +289,7 @@ impl HashLockedEscrowFactory {
         final_addr
     }
 
-    /// Create a destination escrow (equivalent to createDstEscrow in EVM)
+    /// Create a destination escrow (equivalent to createDstEscrow in EVM) - full fill only
     /// This function requires authorization from creator (resolver) for token transfer
     pub fn create_dst_escrow(
         env: Env,
@@ -225,7 +330,7 @@ impl HashLockedEscrowFactory {
         // Uniqueness is achieved through the counter and storage key system
         let final_addr = env.current_contract_address();
 
-        // Create escrow data
+        // Create escrow data (full fill only - no partial fill logic)
         let escrow_data = DestinationEscrowData {
             creator: creator.clone(),
             recipient: recipient.clone(),
@@ -238,6 +343,10 @@ impl HashLockedEscrowFactory {
             cancellation_start,
             funds_withdrawn: false,
             cancelled: false,
+            // Default values for compatibility (full fill = part 0 of 1)
+            part_index: 0,
+            total_parts: 1,
+            is_partial_fill: false,
         };
 
         // Store escrow data
@@ -323,6 +432,74 @@ impl HashLockedEscrowFactory {
         log!(&env, "SourceEscrowWithdrawal: caller={}, amount={}", caller, escrow_data.amount);
     }
 
+    /// Withdraw from source escrow with merkle proof (equivalent to SourceEscrow.withdrawWithProof in EVM)
+    pub fn withdraw_src_escrow_with_proof(
+        env: Env,
+        caller: Address,
+        escrow_address: Address,
+        secret: Bytes,
+        merkle_proof: Vec<BytesN<32>>,
+    ) {
+        caller.require_auth();
+
+        let mut escrow_data: SourceEscrowData = env.storage()
+            .persistent()
+            .get(&DataKey::SourceEscrow(escrow_address.clone()))
+            .unwrap_or_else(|| panic!("Invalid address"));
+
+        // Validate escrow state (same validations as EVM)
+        if escrow_data.funds_withdrawn {
+            panic!("Already withdrawn");
+        }
+        if escrow_data.cancelled {
+            panic!("Already cancelled");
+        }
+
+        let current_time = env.ledger().timestamp();
+        if current_time < escrow_data.withdrawal_start {
+            panic!("Withdrawal not started");
+        }
+        if current_time >= escrow_data.cancellation_start {
+            panic!("Withdrawal ended");
+        }
+
+        // Must be partial fill to use this function
+        if !escrow_data.is_partial_fill {
+            panic!("Use withdraw() for complete fills");
+        }
+
+        // Check private window restriction (same as EVM)
+        if current_time < escrow_data.public_withdrawal_start {
+            if caller != escrow_data.recipient {
+                panic!("Private window only");
+            }
+        }
+
+        // Use hashedSecret directly as merkle root (no embedded parts count) - matches EVM
+        let merkle_root = escrow_data.hashed_secret.clone();
+
+        // Verify merkle proof
+        let secret_hash = env.crypto().sha256(&secret);
+        let secret_hash_bytes = BytesN::from_array(&env, &secret_hash.to_array());
+        let leaf = Self::generate_leaf(&env, escrow_data.part_index, &secret_hash_bytes);
+        
+        if !Self::verify_merkle_proof(&env, &merkle_proof, &merkle_root, &leaf) {
+            panic!("Invalid merkle proof");
+        }
+
+        // Mark as withdrawn
+        escrow_data.funds_withdrawn = true;
+        env.storage().persistent().set(&DataKey::SourceEscrow(escrow_address.clone()), &escrow_data);
+
+        // Transfer funds to caller (resolver) - matches EVM behavior
+        Self::transfer_tokens(&env, &escrow_data.token, &env.current_contract_address(), &caller, escrow_data.amount, false);
+
+        // Transfer security deposit to caller
+        Self::transfer_tokens(&env, &escrow_data.token, &env.current_contract_address(), &caller, escrow_data.security_deposit, false);
+
+        log!(&env, "SourceEscrowWithdrawalWithProof: caller={}, amount={}", caller, escrow_data.amount);
+    }
+
     /// Withdraw from destination escrow (equivalent to DestinationEscrow.withdraw in EVM)
     pub fn withdraw_dst_escrow(
         env: Env,
@@ -378,6 +555,75 @@ impl HashLockedEscrowFactory {
         Self::transfer_tokens(&env, &escrow_data.token, &env.current_contract_address(), &caller, escrow_data.security_deposit, false);
 
         log!(&env, "DestinationEscrowWithdrawal: caller={}, recipient={}, amount={}", 
+             caller, escrow_data.recipient, escrow_data.amount);
+    }
+
+    /// Withdraw from destination escrow with merkle proof (equivalent to DestinationEscrow.withdrawWithProof in EVM)
+    pub fn withdraw_dst_escrow_with_proof(
+        env: Env,
+        caller: Address,
+        escrow_address: Address,
+        secret: Bytes,
+        merkle_proof: Vec<BytesN<32>>,
+    ) {
+        caller.require_auth();
+
+        let mut escrow_data: DestinationEscrowData = env.storage()
+            .persistent()
+            .get(&DataKey::DestinationEscrow(escrow_address.clone()))
+            .unwrap_or_else(|| panic!("Invalid address"));
+
+        // Validate escrow state
+        if escrow_data.funds_withdrawn {
+            panic!("Already withdrawn");
+        }
+        if escrow_data.cancelled {
+            panic!("Already cancelled");
+        }
+
+        let current_time = env.ledger().timestamp();
+        if current_time < escrow_data.withdrawal_start {
+            panic!("Withdrawal not started");
+        }
+        if current_time >= escrow_data.cancellation_start {
+            panic!("Withdrawal ended");
+        }
+
+        // Must be partial fill to use this function
+        if !escrow_data.is_partial_fill {
+            panic!("Use withdraw() for complete fills");
+        }
+
+        // Check private window - both recipient (buyer) and creator (resolver) can withdraw
+        if current_time < escrow_data.public_withdrawal_start {
+            if caller != escrow_data.recipient && caller != escrow_data.creator {
+                panic!("Private window only");
+            }
+        }
+
+        // Use hashedSecret directly as merkle root (no embedded parts count) - matches EVM
+        let merkle_root = escrow_data.hashed_secret.clone();
+
+        // Verify merkle proof
+        let secret_hash = env.crypto().sha256(&secret);
+        let secret_hash_bytes = BytesN::from_array(&env, &secret_hash.to_array());
+        let leaf = Self::generate_leaf(&env, escrow_data.part_index, &secret_hash_bytes);
+        
+        if !Self::verify_merkle_proof(&env, &merkle_proof, &merkle_root, &leaf) {
+            panic!("Invalid merkle proof");
+        }
+
+        // Mark as withdrawn
+        escrow_data.funds_withdrawn = true;
+        env.storage().persistent().set(&DataKey::DestinationEscrow(escrow_address.clone()), &escrow_data);
+
+        // Transfer funds to recipient (buyer) regardless of who calls - matches EVM behavior
+        Self::transfer_tokens(&env, &escrow_data.token, &env.current_contract_address(), &escrow_data.recipient, escrow_data.amount, false);
+
+        // Transfer security deposit to caller
+        Self::transfer_tokens(&env, &escrow_data.token, &env.current_contract_address(), &caller, escrow_data.security_deposit, false);
+
+        log!(&env, "DestinationEscrowWithdrawalWithProof: caller={}, recipient={}, amount={}", 
              caller, escrow_data.recipient, escrow_data.amount);
     }
 
@@ -604,5 +850,214 @@ impl HashLockedEscrowFactory {
                 log!(env, "Token transferred directly: from={}, to={}, amount={}", from, to, amount);
             }
         }
+    }
+
+    /// Create source escrow with partial fill support (separate function to avoid struct CLI issues)
+    pub fn create_src_escrow_partial(
+        env: Env,
+        creator: Address,
+        hashed_secret: BytesN<32>,
+        recipient: Address,
+        buyer: Address,
+        token_amount: i128,
+        withdrawal_start: u64,
+        public_withdrawal_start: u64,
+        cancellation_start: u64,
+        part_index: u64,
+        total_parts: u32,
+    ) -> Address {
+        // Validate inputs
+        if token_amount <= 0 {
+            panic!("Invalid amount");
+        }
+
+        // Validate time windows
+        if public_withdrawal_start <= withdrawal_start
+            || cancellation_start <= public_withdrawal_start
+        {
+            panic!("Invalid time windows");
+        }
+
+        // Check if this is a partial fill
+        let is_partial_fill = total_parts > 1;
+        if is_partial_fill {
+            if part_index >= total_parts as u64 {
+                panic!("Invalid part index");
+            }
+            
+            // Check if part already used
+            let part_used: bool = env.storage()
+                .persistent()
+                .get(&DataKey::PartialFillsUsed(hashed_secret.clone(), part_index))
+                .unwrap_or(false);
+            if part_used {
+                panic!("Part already used");
+            }
+            
+            // Validate sequential order
+            if !Self::validate_secret_index(&env, &hashed_secret, part_index) {
+                panic!("Invalid secret index order");
+            }
+            
+            // Mark this part as used and update tracking
+            env.storage().persistent().set(&DataKey::PartialFillsUsed(hashed_secret.clone(), part_index), &true);
+            
+            let current_count: u64 = env.storage()
+                .persistent()
+                .get(&DataKey::PartialFillsCount(hashed_secret.clone()))
+                .unwrap_or(0);
+            env.storage().persistent().set(&DataKey::PartialFillsCount(hashed_secret.clone()), &(current_count + 1));
+            env.storage().persistent().set(&DataKey::LastUsedIndex(hashed_secret.clone()), &part_index);
+        }
+
+        // Require authorization from creator
+        creator.require_auth();
+        
+        // Check allowance
+        let current_allowance = Self::allowance(env.clone(), buyer.clone(), env.current_contract_address());
+        if current_allowance < token_amount {
+            panic!("Insufficient allowance");
+        }
+        
+        // Reduce allowance
+        let new_allowance = current_allowance - token_amount;
+        env.storage().persistent().set(
+            &DataKey::TokenAllowance(buyer.clone(), env.current_contract_address()),
+            &new_allowance
+        );
+
+        // Generate unique escrow identifier
+        let counter: u64 = env.storage().instance().get(&DataKey::EscrowCounter).unwrap_or(0);
+        let new_counter = counter + 1;
+        env.storage().instance().set(&DataKey::EscrowCounter, &new_counter);
+        
+        let final_addr = env.current_contract_address();
+
+        // Create escrow data
+        let escrow_data = SourceEscrowData {
+            creator: buyer.clone(),
+            recipient: recipient.clone(),
+            hashed_secret: hashed_secret.clone(),
+            token: Self::get_native_token(&env),
+            amount: token_amount,
+            security_deposit: DEPOSIT_AMOUNT,
+            withdrawal_start,
+            public_withdrawal_start,
+            cancellation_start,
+            public_cancellation_start: cancellation_start + 3600, // 1 hour after cancellation starts
+            funds_withdrawn: false,
+            cancelled: false,
+            part_index,
+            total_parts,
+            is_partial_fill,
+        };
+
+        // Store escrow data
+        env.storage().persistent().set(&DataKey::SourceEscrow(final_addr.clone()), &escrow_data);
+        env.storage().persistent().set(&DataKey::EscrowExists(final_addr.clone()), &true);
+
+        // Update user escrows mapping
+        let mut user_escrows: Vec<Address> = env.storage()
+            .persistent()
+            .get(&DataKey::UserEscrows(buyer.clone()))
+            .unwrap_or(Vec::new(&env));
+        user_escrows.push_back(final_addr.clone());
+        env.storage().persistent().set(&DataKey::UserEscrows(buyer.clone()), &user_escrows);
+
+        // Transfer tokens from buyer to escrow (using allowance pattern like EVM)
+        Self::transfer_tokens(&env, &escrow_data.token, &buyer, &final_addr, token_amount, true);
+
+        // Security deposit from creator (resolver)
+        Self::transfer_tokens(&env, &escrow_data.token, &creator, &final_addr, DEPOSIT_AMOUNT, false);
+
+        log!(&env, "SourceEscrowCreated: creator={}, recipient={}, amount={}, part_index={}, total_parts={}", 
+             escrow_data.creator, escrow_data.recipient, escrow_data.amount, part_index, total_parts);
+
+        final_addr
+    }
+
+    /// Create destination escrow with partial fill support (separate function to avoid struct CLI issues)
+    pub fn create_dst_escrow_partial(
+        env: Env,
+        creator: Address,
+        hashed_secret: BytesN<32>,
+        recipient: Address,
+        token_amount: i128,
+        withdrawal_start: u64,
+        public_withdrawal_start: u64,
+        cancellation_start: u64,
+        part_index: u64,
+        total_parts: u32,
+    ) -> Address {
+        // Validate inputs
+        if token_amount <= 0 {
+            panic!("Invalid amount");
+        }
+
+        // Validate time windows
+        if public_withdrawal_start <= withdrawal_start
+            || cancellation_start <= public_withdrawal_start
+        {
+            panic!("Invalid time windows");
+        }
+
+        // Check if this is a partial fill
+        let is_partial_fill = total_parts > 1;
+        if is_partial_fill {
+            if part_index >= total_parts as u64 {
+                panic!("Invalid part index");
+            }
+        }
+
+        // Require authorization from creator
+        creator.require_auth();
+
+        // Generate unique escrow identifier
+        let counter: u64 = env.storage().instance().get(&DataKey::EscrowCounter).unwrap_or(0);
+        let new_counter = counter + 1;
+        env.storage().instance().set(&DataKey::EscrowCounter, &new_counter);
+        
+        let final_addr = env.current_contract_address();
+
+        // Create escrow data
+        let escrow_data = DestinationEscrowData {
+            creator: creator.clone(),
+            recipient: recipient.clone(),
+            hashed_secret: hashed_secret.clone(),
+            token: Self::get_native_token(&env),
+            amount: token_amount,
+            security_deposit: DEPOSIT_AMOUNT,
+            withdrawal_start,
+            public_withdrawal_start,
+            cancellation_start,
+            funds_withdrawn: false,
+            cancelled: false,
+            part_index,
+            total_parts,
+            is_partial_fill,
+        };
+
+        // Store escrow data
+        env.storage().persistent().set(&DataKey::DestinationEscrow(final_addr.clone()), &escrow_data);
+        env.storage().persistent().set(&DataKey::EscrowExists(final_addr.clone()), &true);
+
+        // Update user escrows mapping
+        let mut user_escrows: Vec<Address> = env.storage()
+            .persistent()
+            .get(&DataKey::UserEscrows(creator.clone()))
+            .unwrap_or(Vec::new(&env));
+        user_escrows.push_back(final_addr.clone());
+        env.storage().persistent().set(&DataKey::UserEscrows(creator.clone()), &user_escrows);
+
+        // Transfer tokens from creator to escrow
+        Self::transfer_tokens(&env, &escrow_data.token, &creator, &final_addr, token_amount, false);
+
+        // Security deposit from creator
+        Self::transfer_tokens(&env, &escrow_data.token, &creator, &final_addr, DEPOSIT_AMOUNT, false);
+
+        log!(&env, "DestinationEscrowCreated: creator={}, recipient={}, amount={}, part_index={}, total_parts={}", 
+             escrow_data.creator, escrow_data.recipient, escrow_data.amount, part_index, total_parts);
+
+        final_addr
     }
 }
