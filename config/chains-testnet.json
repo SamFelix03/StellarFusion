@@ -8,7 +8,7 @@
       "symbol": "ETH",
       "decimals": 18
     },
-    "factoryAddress": "0x822478a0aa331Ff33B9ed120d366c423e30867a4",
+    "factoryAddress": "0xAD7F06605dB03909899d76fb5f9b899D03d7Cd2E",
     "tokens": {
       "ETH": {
         "name": "Ethereum",
@@ -33,6 +33,40 @@
       }
     }
   },
+  "bsc-testnet": {
+    "name": "BSC Testnet",
+    "chainId": 97,
+    "rpcUrl": "https://bnb-testnet.g.alchemy.com/v2/NMsHzNgJ7XUYtzNyFpEJ8yT4muQ_lkRF",
+    "nativeCurrency": {
+      "name": "Binance Coin",
+      "symbol": "BNB",
+      "decimals": 18
+    },
+    "factoryAddress": "0x7Ea460178A028186D4A900052fbabA8c20E316FC",
+    "tokens": {
+      "BNB": {
+        "name": "Binance Coin",
+        "symbol": "BNB",
+        "address": "0x0000000000000000000000000000000000000000",
+        "decimals": 18,
+        "isNative": true
+      },
+      "WBNB": {
+        "name": "Wrapped BNB",
+        "symbol": "WBNB",
+        "address": "0xae13d989daC2f0dEbFf460aC112a837C89BAa7cd",
+        "decimals": 18,
+        "isNative": false
+      },
+      "USDT": {
+        "name": "Tether USD",
+        "symbol": "USDT",
+        "address": "0x337610d27c682E347C9cD60BD4b3b107C9d34dDd",
+        "decimals": 18,
+        "isNative": false
+      }
+    }
+  },
   "stellar-testnet": {
     "name": "Stellar Testnet",
     "chainId": "testnet",
@@ -42,7 +76,7 @@
       "symbol": "XLM",
       "decimals": 7
     },
-    "factoryAddress": "CBDMXSMH25IQJPI4YSAKMVITGXFVFH2O23SSAPS5L73F2WIGSDHQA6OY",
+    "factoryAddress": "CCRZFIB4XJMF76GZHCREETMQZD6JG64FC4IYR62VA2M7JEMLTVBIVTNR",
     "tokens": {
       "XLM": {
         "name": "Stellar Lumens",
@@ -61,4 +95,4 @@
     },
     "isStellar": true
   }
-}
+} 
