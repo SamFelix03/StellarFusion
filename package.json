@@ -9,16 +9,16 @@
     "swap": "npm run build && node dist/src/dynamic-swap.js"
   },
   "dependencies": {
-    "ethers": "^5.7.2",
-    "dotenv": "^16.0.3",
     "axios": "^1.4.0",
+    "dotenv": "^16.0.3",
+    "ethers": "^5.8.0",
     "inquirer": "^8.2.5",
-    "stellar-sdk": "^11.0.0",
-    "soroban-client": "^0.9.0"
+    "soroban-client": "^0.9.0",
+    "stellar-sdk": "^11.0.0"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
     "@types/inquirer": "^9.0.0",
+    "@types/node": "^20.0.0",
     "typescript": "^5.0.0"
   },
   "keywords": [
@@ -30,4 +30,4 @@
   ],
   "author": "",
   "license": "MIT"
-} 
+}
