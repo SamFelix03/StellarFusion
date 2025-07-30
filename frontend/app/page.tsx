@@ -3,6 +3,8 @@
 import { useState } from "react"
 import LandingPage from "../landing-page"
 import Component from "../dutch-auction-platform"
+import SwapInterface from "../components/SwapInterface"
+import { WalletProvider } from "../components/WalletProvider"
 
 type View = "landing" | "swap" | "resolver"
 
@@ -21,14 +23,22 @@ export default function Page() {
     setCurrentView("landing")
   }
 
-  if (currentView === "swap" || currentView === "resolver") {
-    return <Component onBackToHome={handleBackToHome} />
-  }
-
   return (
-    <LandingPage 
-      onEnterPlatform={handleEnterSwap} 
-      onEnterResolver={handleEnterResolver} 
-    />
+    <WalletProvider>
+      {currentView === "swap" && (
+        <SwapInterface onBackToHome={handleBackToHome} />
+      )}
+
+      {currentView === "resolver" && (
+        <Component onBackToHome={handleBackToHome} />
+      )}
+
+      {currentView === "landing" && (
+        <LandingPage 
+          onEnterPlatform={handleEnterSwap} 
+          onEnterResolver={handleEnterResolver} 
+        />
+      )}
+    </WalletProvider>
   )
 }

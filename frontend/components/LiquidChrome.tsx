@@ -13,7 +13,7 @@ export const LiquidChrome = ({
   const containerRef = useRef(null);
 
   useEffect(() => {
-    if (!containerRef.current) return;
+    if (!containerRef.current || typeof window === 'undefined') return;
 
     const container = containerRef.current;
     const renderer = new Renderer({ antialias: true });

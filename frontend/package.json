@@ -40,6 +40,9 @@
     "@radix-ui/react-tooltip": "1.1.6",
     "@react-three/fiber": "latest",
     "@react-three/postprocessing": "latest",
+    "@tanstack/query-core": "^5.83.0",
+    "@tanstack/react-query": "^5.83.0",
+    "@wagmi/core": "^2.18.0",
     "autoprefixer": "^10.4.20",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -70,6 +73,8 @@
     "tailwindcss-animate": "^1.0.7",
     "three": "latest",
     "vaul": "^0.9.6",
+    "viem": "^2.33.1",
+    "wagmi": "^2.16.0",
     "zod": "^3.24.1"
   },
   "devDependencies": {

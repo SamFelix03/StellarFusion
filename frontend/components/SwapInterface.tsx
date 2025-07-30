@@ -1,0 +1,506 @@
+"use client"
+
+import { useState, useEffect } from "react"
+import { motion, AnimatePresence } from "framer-motion"
+import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
+import { Input } from "@/components/ui/input"
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import {
+  ArrowDown,
+  ArrowUpDown,
+  Settings,
+  RefreshCw,
+  ChevronDown,
+  Star,
+  Search,
+  Wallet,
+  X,
+  ArrowLeft,
+} from "lucide-react"
+import LiquidChrome from "./LiquidChrome"
+import { useWallet } from "./WalletProvider"
+
+interface Token {
+  symbol: string
+  name: string
+  icon: string
+  balance: number
+  usdValue: number
+  chain: "Ethereum" | "Stellar"
+  address: string
+}
+
+interface SwapState {
+  fromToken: Token | null
+  toToken: Token | null
+  fromAmount: string
+  toAmount: string
+  fromChain: "Ethereum" | "Stellar"
+  toChain: "Ethereum" | "Stellar"
+}
+
+const mockTokens: Token[] = [
+  {
+    symbol: "ETH",
+    name: "Ether",
+    icon: "🔷",
+    balance: 0,
+    usdValue: 0,
+    chain: "Ethereum",
+    address: "0x0000000000000000000000000000000000000000"
+  },
+  {
+    symbol: "USDC",
+    name: "USD Coin",
+    icon: "💙",
+    balance: 0,
+    usdValue: 0,
+    chain: "Ethereum",
+    address: "0xA0b86a33E6441b8C4C8C8C8C8C8C8C8C8C8C8C8"
+  },
+  {
+    symbol: "USDT",
+    name: "Tether USD",
+    icon: "💚",
+    balance: 0,
+    usdValue: 0,
+    chain: "Ethereum",
+    address: "0xdAC17F958D2ee523a2206206994597C13D831ec7"
+  },
+  {
+    symbol: "XLM",
+    name: "Stellar Lumens",
+    icon: "⭐",
+    balance: 0,
+    usdValue: 0,
+    chain: "Stellar",
+    address: "native"
+  },
+  {
+    symbol: "USDC",
+    name: "USD Coin",
+    icon: "💙",
+    balance: 0,
+    usdValue: 0,
+    chain: "Stellar",
+    address: "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34KUEKUS"
+  }
+]
+
+export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => void }) {
+  const { isConnected, address, connect, disconnect, isLoading } = useWallet()
+  
+  const [swapState, setSwapState] = useState<SwapState>({
+    fromToken: null,
+    toToken: null,
+    fromAmount: "",
+    toAmount: "",
+    fromChain: "Ethereum",
+    toChain: "Stellar"
+  })
+  
+  const [showTokenSelector, setShowTokenSelector] = useState(false)
+  const [tokenSelectorType, setTokenSelectorType] = useState<"from" | "to">("from")
+  const [searchQuery, setSearchQuery] = useState("")
+
+  // Fetch token balances when wallet connects
+  useEffect(() => {
+    if (isConnected && address) {
+      // Mock token balances - in real implementation, this would fetch from blockchain
+      const updatedTokens = mockTokens.map(token => ({
+        ...token,
+        balance: Math.random() * 1000,
+        usdValue: Math.random() * 50000
+      }))
+      
+      // Update swap state with first available tokens
+      setSwapState(prev => ({
+        ...prev,
+        fromToken: updatedTokens.find(t => t.chain === "Ethereum") || null,
+        toToken: updatedTokens.find(t => t.chain === "Stellar") || null
+      }))
+    }
+  }, [isConnected, address])
+
+  const openTokenSelector = (type: "from" | "to") => {
+    setTokenSelectorType(type)
+    setShowTokenSelector(true)
+    setSearchQuery("")
+  }
+
+  const selectToken = (token: Token) => {
+    if (tokenSelectorType === "from") {
+      setSwapState(prev => ({
+        ...prev,
+        fromToken: token,
+        fromChain: token.chain,
+        toChain: token.chain === "Ethereum" ? "Stellar" : "Ethereum"
+      }))
+    } else {
+      setSwapState(prev => ({
+        ...prev,
+        toToken: token,
+        toChain: token.chain
+      }))
+    }
+    setShowTokenSelector(false)
+  }
+
+  const swapTokens = () => {
+    setSwapState(prev => ({
+      ...prev,
+      fromToken: prev.toToken,
+      toToken: prev.fromToken,
+      fromChain: prev.toChain,
+      toChain: prev.fromChain,
+      fromAmount: prev.toAmount,
+      toAmount: prev.fromAmount
+    }))
+  }
+
+  const handleFromAmountChange = (value: string) => {
+    setSwapState(prev => ({
+      ...prev,
+      fromAmount: value,
+      toAmount: value ? (parseFloat(value) * 1.5).toString() : "" // Mock conversion rate
+    }))
+  }
+
+  const setMaxAmount = () => {
+    if (swapState.fromToken) {
+      const maxAmount = swapState.fromToken.balance.toString()
+      handleFromAmountChange(maxAmount)
+    }
+  }
+
+  const filteredTokens = mockTokens.filter(token => {
+    const matchesSearch = token.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                         token.symbol.toLowerCase().includes(searchQuery.toLowerCase())
+    
+    if (tokenSelectorType === "from") {
+      return matchesSearch && token.chain === swapState.fromChain
+    } else {
+      return matchesSearch && token.chain === swapState.toChain && 
+             token.symbol !== swapState.fromToken?.symbol
+    }
+  })
+
+  const canSwap = swapState.fromToken && swapState.toToken && 
+                  swapState.fromAmount && parseFloat(swapState.fromAmount) > 0 &&
+                  parseFloat(swapState.fromAmount) <= (swapState.fromToken?.balance || 0)
+
+  return (
+    <div className="min-h-screen bg-black text-white relative overflow-hidden">
+      {/* LiquidChrome Background */}
+      <div className="fixed inset-0 z-0">
+        <LiquidChrome
+          baseColor={[0.1, 0.1, 0.1]}
+          speed={0.05}
+          amplitude={0.6}
+          interactive={false}
+        />
+      </div>
+
+      {/* Back to Home Button */}
+      {onBackToHome && (
+        <motion.div
+          initial={{ opacity: 0, x: -20 }}
+          animate={{ opacity: 1, x: 0 }}
+          transition={{ duration: 0.6 }}
+          className="fixed top-8 left-8 z-50"
+        >
+          <Button
+            variant="outline"
+            size="sm"
+            className="border-white/20 text-white hover:bg-white/10 backdrop-blur-sm bg-transparent"
+            onClick={onBackToHome}
+          >
+            <ArrowLeft className="w-4 h-4 mr-2" />
+            Back to Home
+          </Button>
+        </motion.div>
+      )}
+
+      {/* Content */}
+      <div className="relative z-10 flex items-center justify-center min-h-screen p-8">
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.8 }}
+          className="w-full max-w-md"
+        >
+          {/* Main Swap Card */}
+          <div className="bg-white/10 backdrop-blur-xl border border-white/20 rounded-3xl p-6 shadow-2xl">
+            {/* Header */}
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex space-x-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="bg-white/20 text-white hover:bg-white/30 rounded-xl"
+                >
+                  Swap
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-white/60 hover:text-white hover:bg-white/10 rounded-xl"
+                >
+                  Limit
+                </Button>
+              </div>
+              <div className="flex space-x-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-white/60 hover:text-white hover:bg-white/10 rounded-xl p-2"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-white/60 hover:text-white hover:bg-white/10 rounded-xl p-2"
+                >
+                  <Settings className="w-4 h-4" />
+                </Button>
+              </div>
+            </div>
+
+            {/* Wallet Connection */}
+            {!isConnected ? (
+              <div className="text-center py-8">
+                <Wallet className="w-12 h-12 mx-auto mb-4 text-white/60" />
+                <h3 className="text-lg font-semibold mb-2">Connect Wallet</h3>
+                <p className="text-white/60 mb-6">Connect your wallet to start swapping tokens</p>
+                <Button
+                  onClick={connect}
+                  disabled={isLoading}
+                  className="bg-white text-black hover:bg-gray-100 font-semibold px-8 py-3"
+                >
+                  {isLoading ? "Connecting..." : "Connect Wallet"}
+                </Button>
+              </div>
+            ) : (
+              <>
+                {/* From Token */}
+                <div className="bg-white/5 backdrop-blur-sm border border-white/10 rounded-2xl p-4 mb-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm text-white/60">You pay</span>
+                    <div className="flex items-center space-x-2">
+                      <span className="text-sm text-white/60">
+                        Balance: {swapState.fromToken?.balance.toFixed(4) || "0"}
+                      </span>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={setMaxAmount}
+                        className="text-xs bg-white/10 hover:bg-white/20 text-white px-2 py-1 rounded"
+                      >
+                        MAX
+                      </Button>
+                    </div>
+                  </div>
+                  
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-3">
+                      <Button
+                        variant="ghost"
+                        onClick={() => openTokenSelector("from")}
+                        className="flex items-center space-x-2 bg-white/10 hover:bg-white/20 text-white p-2 rounded-xl"
+                      >
+                        <span className="text-xl">{swapState.fromToken?.icon || "🔷"}</span>
+                        <span className="font-semibold">{swapState.fromToken?.symbol || "Select"}</span>
+                        <ChevronDown className="w-4 h-4" />
+                      </Button>
+                    </div>
+                    
+                    <div className="text-right">
+                      <Input
+                        type="number"
+                        value={swapState.fromAmount}
+                        onChange={(e) => handleFromAmountChange(e.target.value)}
+                        placeholder="0.0"
+                        className="text-right text-2xl font-bold bg-transparent border-none text-white placeholder-white/40 focus:ring-0"
+                      />
+                      <div className="text-sm text-white/60">
+                        ~${swapState.fromToken?.usdValue.toFixed(2) || "0"}
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div className="mt-2 text-xs text-white/40">
+                    on {swapState.fromChain}
+                  </div>
+                </div>
+
+                {/* Swap Arrow */}
+                <div className="flex justify-center my-4">
+                  <Button
+                    variant="ghost"
+                    onClick={swapTokens}
+                    className="bg-white/10 hover:bg-white/20 text-white p-3 rounded-full"
+                  >
+                    <ArrowUpDown className="w-5 h-5" />
+                  </Button>
+                </div>
+
+                {/* To Token */}
+                <div className="bg-white/5 backdrop-blur-sm border border-white/10 rounded-2xl p-4 mb-6">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm text-white/60">You receive</span>
+                    <span className="text-sm text-white/60">
+                      Balance: {swapState.toToken?.balance.toFixed(4) || "0"}
+                    </span>
+                  </div>
+                  
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-3">
+                      <Button
+                        variant="ghost"
+                        onClick={() => openTokenSelector("to")}
+                        className="flex items-center space-x-2 bg-white/10 hover:bg-white/20 text-white p-2 rounded-xl"
+                      >
+                        <span className="text-xl">{swapState.toToken?.icon || "⭐"}</span>
+                        <span className="font-semibold">{swapState.toToken?.symbol || "Select"}</span>
+                        <ChevronDown className="w-4 h-4" />
+                      </Button>
+                    </div>
+                    
+                    <div className="text-right">
+                      <div className="text-2xl font-bold text-white">
+                        {swapState.toAmount || "0.0"}
+                      </div>
+                      <div className="text-sm text-white/60">
+                        ~${swapState.toToken?.usdValue.toFixed(2) || "0"}
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div className="mt-2 text-xs text-white/40">
+                    on {swapState.toChain}
+                  </div>
+                </div>
+
+                {/* Exchange Rate */}
+                <div className="flex items-center justify-between text-sm text-white/60 mb-6">
+                  <span>
+                    1 {swapState.fromToken?.symbol} = 1.5 {swapState.toToken?.symbol} ~$1.50
+                  </span>
+                  <div className="flex items-center space-x-1">
+                    <span className="text-green-400">Free</span>
+                    <span>$0.00</span>
+                    <ChevronDown className="w-3 h-3" />
+                  </div>
+                </div>
+
+                {/* Swap Button */}
+                <Button
+                  onClick={() => {}}
+                  disabled={!canSwap}
+                  className={`w-full py-4 rounded-2xl font-semibold ${
+                    canSwap
+                      ? "bg-white text-black hover:bg-gray-100"
+                      : "bg-white/20 text-white/40 cursor-not-allowed"
+                  }`}
+                >
+                  {!swapState.fromToken || !swapState.toToken
+                    ? "Select tokens"
+                    : !swapState.fromAmount
+                    ? "Enter amount"
+                    : parseFloat(swapState.fromAmount) > (swapState.fromToken?.balance || 0)
+                    ? "Insufficient balance"
+                    : "Swap"}
+                </Button>
+
+                {/* Wallet Info */}
+                <div className="mt-4 text-center">
+                  <div className="text-sm text-white/60">
+                    Connected: {address?.slice(0, 6)}...{address?.slice(-4)}
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={disconnect}
+                    className="text-xs text-white/40 hover:text-white mt-2"
+                  >
+                    Disconnect
+                  </Button>
+                </div>
+              </>
+            )}
+          </div>
+        </motion.div>
+      </div>
+
+      {/* Token Selector Modal */}
+      <AnimatePresence>
+        {showTokenSelector && (
+          <Dialog open={showTokenSelector} onOpenChange={setShowTokenSelector}>
+            <DialogContent className="bg-white/10 backdrop-blur-xl border border-white/20 max-w-md">
+              <DialogHeader>
+                <DialogTitle className="flex items-center space-x-2 text-white">
+                  <span>🌐</span>
+                  <span>All networks</span>
+                  <ChevronDown className="w-4 h-4" />
+                </DialogTitle>
+              </DialogHeader>
+              
+              {/* Search */}
+              <div className="relative mb-4">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-white/40" />
+                <Input
+                  placeholder="Search by name or paste address"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="pl-10 bg-white/10 border-white/20 text-white placeholder-white/40"
+                />
+              </div>
+
+              {/* Popular Tokens */}
+              <div className="flex space-x-2 mb-4 overflow-x-auto pb-2">
+                {["ETH", "XLM", "USDC", "USDT"].map((symbol) => (
+                  <Button
+                    key={symbol}
+                    variant="ghost"
+                    size="sm"
+                    className="bg-white/10 hover:bg-white/20 text-white px-3 py-2 rounded-full text-sm whitespace-nowrap"
+                  >
+                    {symbol}
+                  </Button>
+                ))}
+              </div>
+
+              {/* Token List */}
+              <div className="max-h-64 overflow-y-auto space-y-2">
+                {filteredTokens.map((token) => (
+                  <Button
+                    key={`${token.chain}-${token.symbol}`}
+                    variant="ghost"
+                    onClick={() => selectToken(token)}
+                    className="w-full justify-between bg-white/5 hover:bg-white/10 text-white p-3 rounded-xl"
+                  >
+                    <div className="flex items-center space-x-3">
+                      <span className="text-xl">{token.icon}</span>
+                      <div className="text-left">
+                        <div className="font-semibold">{token.name}</div>
+                        <div className="text-sm text-white/60">
+                          {token.balance.toFixed(4)} {token.symbol} · {token.chain}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-sm">${token.usdValue.toFixed(2)}</div>
+                      <Star className="w-4 h-4 text-white/40" />
+                    </div>
+                  </Button>
+                ))}
+              </div>
+            </DialogContent>
+          </Dialog>
+        )}
+      </AnimatePresence>
+    </div>
+  )
+} 
