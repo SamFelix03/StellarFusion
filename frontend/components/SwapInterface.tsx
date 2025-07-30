@@ -18,9 +18,9 @@ import {
   X,
   ArrowLeft,
 } from "lucide-react"
-import LiquidChrome from "./LiquidChrome"
 import { useWallet } from "./WalletProvider"
 import { useBalance } from "wagmi"
+import Aurora from "./Aurora"
 
 interface Token {
   symbol: string
@@ -129,8 +129,7 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
 
   // Fetch real ETH balance using wagmi
   const { data: ethBalance } = useBalance({
-    address: address,
-    watch: true,
+    address: address as `0x${string}` | undefined,
   })
 
   // Fetch token prices from CoinGecko
@@ -237,10 +236,13 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
   }
 
   const handleFromAmountChange = (value: string) => {
+    const numValue = parseFloat(value) || 0
+    const formattedValue = numValue.toFixed(4)
+    
     setSwapState(prev => ({
       ...prev,
       fromAmount: value,
-      toAmount: value ? (parseFloat(value) * 1.5).toString() : "" // Mock conversion rate
+      toAmount: value ? (numValue * 1.5).toFixed(4) : "" // Mock conversion rate with 4 decimal places
     }))
   }
 
@@ -269,13 +271,13 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
 
   return (
     <div className="min-h-screen bg-black text-white relative overflow-hidden">
-      {/* LiquidChrome Background */}
+      {/* Aurora Background */}
       <div className="fixed inset-0 z-0">
-        <LiquidChrome
-          baseColor={[0.05, 0.05, 0.05]}
-          speed={0.05}
-          amplitude={0.6}
-          interactive={false}
+        <Aurora 
+          colorStops={["#FF6B9D", "#4ECDC4", "#45B7D1"]}
+          amplitude={1.2}
+          blend={0.6}
+          speed={0.3}
         />
       </div>
 
@@ -344,7 +346,7 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
                     <span className="text-sm text-white/60">You pay</span>
                     <div className="flex items-center space-x-2">
                       <span className="text-sm text-white/60">
-                        Balance: {swapState.fromToken?.balance.toFixed(4) || "0"}
+                        Balance: {swapState.fromToken?.balance.toFixed(4) || "0.0000"}
                       </span>
                       <Button
                         variant="ghost"
@@ -405,7 +407,7 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-sm text-white/60">You receive</span>
                     <span className="text-sm text-white/60">
-                      Balance: {swapState.toToken?.balance.toFixed(4) || "0"}
+                      Balance: {swapState.toToken?.balance.toFixed(4) || "0.0000"}
                     </span>
                   </div>
                   
@@ -427,7 +429,16 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
                         {swapState.toAmount || "0.0"}
                       </div>
                       <div className="text-sm text-white/60">
-                        ~${swapState.toToken?.usdValue.toFixed(2) || "0"}
+                        ~${(() => {
+                          if (swapState.toAmount && swapState.toToken && priceData) {
+                            const amount = parseFloat(swapState.toAmount)
+                            const tokenId = swapState.toToken.coingeckoId
+                            if (tokenId && priceData[tokenId]) {
+                              return (amount * priceData[tokenId].usd).toFixed(2)
+                            }
+                          }
+                          return "0.00"
+                        })()}
                       </div>
                     </div>
                   </div>
@@ -440,7 +451,10 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
                 {/* Exchange Rate */}
                 <div className="flex items-center justify-between text-sm text-white/60 mb-6">
                   <span>
-                    1 {swapState.fromToken?.symbol} = 1.5 {swapState.toToken?.symbol} ~$1.50
+                    {swapState.fromAmount && swapState.toAmount && swapState.fromToken && swapState.toToken
+                      ? `1 ${swapState.fromToken.symbol} = ${(parseFloat(swapState.toAmount) / parseFloat(swapState.fromAmount)).toFixed(4)} ${swapState.toToken.symbol}`
+                      : `1 ${swapState.fromToken?.symbol || "ETH"} = 1.5 ${swapState.toToken?.symbol || "XLM"}`
+                    } ~$1.50
                   </span>
                   <div className="flex items-center space-x-1">
                     <span className="text-green-400">Free</span>
