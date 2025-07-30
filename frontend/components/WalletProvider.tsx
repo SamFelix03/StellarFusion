@@ -4,7 +4,7 @@ import { createContext, useContext, useEffect, useState } from "react"
 import { createConfig, http } from "wagmi"
 import { mainnet, sepolia } from "wagmi/chains"
 import { metaMask, walletConnect, coinbaseWallet } from "wagmi/connectors"
-import { WagmiProvider } from "wagmi"
+import { WagmiProvider, useAccount, useConnect, useDisconnect } from "wagmi"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 
 const config = createConfig({
@@ -32,46 +32,45 @@ interface WalletContextType {
 
 const WalletContext = createContext<WalletContextType | undefined>(undefined)
 
-export function WalletProvider({ children }: { children: React.ReactNode }) {
-  const [isConnected, setIsConnected] = useState(false)
-  const [address, setAddress] = useState<string | undefined>()
-  const [isLoading, setIsLoading] = useState(false)
+function WalletContextProvider({ children }: { children: React.ReactNode }) {
+  const { address, isConnected } = useAccount()
+  const { connect, isPending } = useConnect()
+  const { disconnect } = useDisconnect()
 
-  const connect = async () => {
-    setIsLoading(true)
+  const handleConnect = async () => {
     try {
-      // This would be handled by wagmi hooks in a real implementation
-      // For now, we'll simulate the connection
-      await new Promise(resolve => setTimeout(resolve, 1000))
-      const mockAddress = "0x" + Math.random().toString(16).substr(2, 40)
-      setAddress(mockAddress)
-      setIsConnected(true)
+      await connect({ connector: metaMask() })
     } catch (error) {
       console.error("Failed to connect wallet:", error)
-    } finally {
-      setIsLoading(false)
     }
   }
 
-  const disconnect = () => {
-    setIsConnected(false)
-    setAddress(undefined)
+  const handleDisconnect = () => {
+    disconnect()
   }
 
   return (
+    <WalletContext.Provider
+      value={{
+        isConnected,
+        address,
+        connect: handleConnect,
+        disconnect: handleDisconnect,
+        isLoading: isPending,
+      }}
+    >
+      {children}
+    </WalletContext.Provider>
+  )
+}
+
+export function WalletProvider({ children }: { children: React.ReactNode }) {
+  return (
     <WagmiProvider config={config}>
       <QueryClientProvider client={queryClient}>
-        <WalletContext.Provider
-          value={{
-            isConnected,
-            address,
-            connect,
-            disconnect,
-            isLoading,
-          }}
-        >
+        <WalletContextProvider>
           {children}
-        </WalletContext.Provider>
+        </WalletContextProvider>
       </QueryClientProvider>
     </WagmiProvider>
   )

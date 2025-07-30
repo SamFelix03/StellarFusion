@@ -20,6 +20,7 @@ import {
 } from "lucide-react"
 import LiquidChrome from "./LiquidChrome"
 import { useWallet } from "./WalletProvider"
+import { useBalance } from "wagmi"
 
 interface Token {
   symbol: string
@@ -29,6 +30,7 @@ interface Token {
   usdValue: number
   chain: "Ethereum" | "Stellar"
   address: string
+  coingeckoId?: string
 }
 
 interface SwapState {
@@ -40,6 +42,12 @@ interface SwapState {
   toChain: "Ethereum" | "Stellar"
 }
 
+interface PriceData {
+  [key: string]: {
+    usd: number
+  }
+}
+
 const mockTokens: Token[] = [
   {
     symbol: "ETH",
@@ -48,7 +56,18 @@ const mockTokens: Token[] = [
     balance: 0,
     usdValue: 0,
     chain: "Ethereum",
-    address: "0x0000000000000000000000000000000000000000"
+    address: "0x0000000000000000000000000000000000000000",
+    coingeckoId: "ethereum"
+  },
+  {
+    symbol: "Sepolia ETH",
+    name: "Sepolia Ether",
+    icon: "🔷",
+    balance: 0,
+    usdValue: 0,
+    chain: "Ethereum",
+    address: "0x0000000000000000000000000000000000000000",
+    coingeckoId: "ethereum"
   },
   {
     symbol: "USDC",
@@ -75,7 +94,8 @@ const mockTokens: Token[] = [
     balance: 0,
     usdValue: 0,
     chain: "Stellar",
-    address: "native"
+    address: "native",
+    coingeckoId: "stellar"
   },
   {
     symbol: "USDC",
@@ -103,16 +123,55 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
   const [showTokenSelector, setShowTokenSelector] = useState(false)
   const [tokenSelectorType, setTokenSelectorType] = useState<"from" | "to">("from")
   const [searchQuery, setSearchQuery] = useState("")
+  const [priceData, setPriceData] = useState<PriceData>({})
+  const [currentUsdValue, setCurrentUsdValue] = useState(0)
+  const [tokensWithBalances, setTokensWithBalances] = useState<Token[]>(mockTokens)
 
-  // Fetch token balances when wallet connects
+  // Fetch real ETH balance using wagmi
+  const { data: ethBalance } = useBalance({
+    address: address,
+    watch: true,
+  })
+
+  // Fetch token prices from CoinGecko
+  const fetchPrices = async () => {
+    try {
+      const response = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=ethereum,stellar&vs_currencies=usd')
+      const data = await response.json()
+      setPriceData(data)
+    } catch (error) {
+      console.error('Failed to fetch prices:', error)
+    }
+  }
+
+  // Fetch prices on component mount
   useEffect(() => {
-    if (isConnected && address) {
-      // Mock token balances - in real implementation, this would fetch from blockchain
-      const updatedTokens = mockTokens.map(token => ({
-        ...token,
-        balance: Math.random() * 1000,
-        usdValue: Math.random() * 50000
-      }))
+    fetchPrices()
+    // Refresh prices every 30 seconds
+    const interval = setInterval(fetchPrices, 30000)
+    return () => clearInterval(interval)
+  }, [])
+
+  // Update token balances when wallet connects or ETH balance changes
+  useEffect(() => {
+    if (isConnected && address && ethBalance) {
+      const updatedTokens = mockTokens.map(token => {
+        if (token.symbol === "ETH" || token.symbol === "Sepolia ETH") {
+          return {
+            ...token,
+            balance: parseFloat(ethBalance.formatted),
+            usdValue: parseFloat(ethBalance.formatted) * (priceData.ethereum?.usd || 0)
+          }
+        }
+        // For other tokens, you would fetch their balances here
+        return {
+          ...token,
+          balance: Math.random() * 100, // Mock balance for other tokens
+          usdValue: 0
+        }
+      })
+      
+      setTokensWithBalances(updatedTokens)
       
       // Update swap state with first available tokens
       setSwapState(prev => ({
@@ -121,7 +180,24 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
         toToken: updatedTokens.find(t => t.chain === "Stellar") || null
       }))
     }
-  }, [isConnected, address])
+  }, [isConnected, address, ethBalance, priceData])
+
+  // Calculate USD value when amount or price data changes
+  useEffect(() => {
+    if (swapState.fromAmount && swapState.fromToken && priceData) {
+      const amount = parseFloat(swapState.fromAmount)
+      const tokenId = swapState.fromToken.coingeckoId
+      
+      if (tokenId && priceData[tokenId]) {
+        const usdValue = amount * priceData[tokenId].usd
+        setCurrentUsdValue(usdValue)
+      } else {
+        setCurrentUsdValue(0)
+      }
+    } else {
+      setCurrentUsdValue(0)
+    }
+  }, [swapState.fromAmount, swapState.fromToken, priceData])
 
   const openTokenSelector = (type: "from" | "to") => {
     setTokenSelectorType(type)
@@ -135,7 +211,8 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
         ...prev,
         fromToken: token,
         fromChain: token.chain,
-        toChain: token.chain === "Ethereum" ? "Stellar" : "Ethereum"
+        toChain: token.chain === "Ethereum" ? "Stellar" : "Ethereum",
+        fromAmount: token.balance.toString() // Auto-fill with balance
       }))
     } else {
       setSwapState(prev => ({
@@ -174,7 +251,7 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
     }
   }
 
-  const filteredTokens = mockTokens.filter(token => {
+  const filteredTokens = tokensWithBalances.filter(token => {
     const matchesSearch = token.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
                          token.symbol.toLowerCase().includes(searchQuery.toLowerCase())
     
@@ -195,7 +272,7 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
       {/* LiquidChrome Background */}
       <div className="fixed inset-0 z-0">
         <LiquidChrome
-          baseColor={[0.1, 0.1, 0.1]}
+          baseColor={[0.05, 0.05, 0.05]}
           speed={0.05}
           amplitude={0.6}
           interactive={false}
@@ -231,39 +308,16 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
           className="w-full max-w-md"
         >
           {/* Main Swap Card */}
-          <div className="bg-white/10 backdrop-blur-xl border border-white/20 rounded-3xl p-6 shadow-2xl">
+          <div className="bg-black/40 backdrop-blur-xl border border-white/10 rounded-3xl p-6 shadow-2xl">
             {/* Header */}
             <div className="flex items-center justify-between mb-6">
               <div className="flex space-x-2">
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="bg-white/20 text-white hover:bg-white/30 rounded-xl"
+                  className="bg-white/10 text-white hover:bg-white/20 rounded-xl"
                 >
                   Swap
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="text-white/60 hover:text-white hover:bg-white/10 rounded-xl"
-                >
-                  Limit
-                </Button>
-              </div>
-              <div className="flex space-x-2">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="text-white/60 hover:text-white hover:bg-white/10 rounded-xl p-2"
-                >
-                  <RefreshCw className="w-4 h-4" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="text-white/60 hover:text-white hover:bg-white/10 rounded-xl p-2"
-                >
-                  <Settings className="w-4 h-4" />
                 </Button>
               </div>
             </div>
@@ -285,7 +339,7 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
             ) : (
               <>
                 {/* From Token */}
-                <div className="bg-white/5 backdrop-blur-sm border border-white/10 rounded-2xl p-4 mb-4">
+                <div className="bg-black/30 backdrop-blur-sm border border-white/10 rounded-2xl p-4 mb-4">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-sm text-white/60">You pay</span>
                     <div className="flex items-center space-x-2">
@@ -325,7 +379,7 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
                         className="text-right text-2xl font-bold bg-transparent border-none text-white placeholder-white/40 focus:ring-0"
                       />
                       <div className="text-sm text-white/60">
-                        ~${swapState.fromToken?.usdValue.toFixed(2) || "0"}
+                        ~${currentUsdValue.toFixed(2)}
                       </div>
                     </div>
                   </div>
@@ -347,7 +401,7 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
                 </div>
 
                 {/* To Token */}
-                <div className="bg-white/5 backdrop-blur-sm border border-white/10 rounded-2xl p-4 mb-6">
+                <div className="bg-black/30 backdrop-blur-sm border border-white/10 rounded-2xl p-4 mb-6">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-sm text-white/60">You receive</span>
                     <span className="text-sm text-white/60">
@@ -402,7 +456,7 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
                   className={`w-full py-4 rounded-2xl font-semibold ${
                     canSwap
                       ? "bg-white text-black hover:bg-gray-100"
-                      : "bg-white/20 text-white/40 cursor-not-allowed"
+                      : "bg-white/10 text-white/40 cursor-not-allowed"
                   }`}
                 >
                   {!swapState.fromToken || !swapState.toToken
@@ -438,7 +492,7 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
       <AnimatePresence>
         {showTokenSelector && (
           <Dialog open={showTokenSelector} onOpenChange={setShowTokenSelector}>
-            <DialogContent className="bg-white/10 backdrop-blur-xl border border-white/20 max-w-md">
+            <DialogContent className="bg-black/40 backdrop-blur-xl border border-white/10 max-w-md">
               <DialogHeader>
                 <DialogTitle className="flex items-center space-x-2 text-white">
                   <span>🌐</span>
@@ -454,13 +508,13 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
                   placeholder="Search by name or paste address"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="pl-10 bg-white/10 border-white/20 text-white placeholder-white/40"
+                  className="pl-10 bg-black/30 border-white/10 text-white placeholder-white/40"
                 />
               </div>
 
               {/* Popular Tokens */}
               <div className="flex space-x-2 mb-4 overflow-x-auto pb-2">
-                {["ETH", "XLM", "USDC", "USDT"].map((symbol) => (
+                {["ETH", "Sepolia ETH", "XLM", "USDC", "USDT"].map((symbol) => (
                   <Button
                     key={symbol}
                     variant="ghost"
@@ -479,7 +533,7 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
                     key={`${token.chain}-${token.symbol}`}
                     variant="ghost"
                     onClick={() => selectToken(token)}
-                    className="w-full justify-between bg-white/5 hover:bg-white/10 text-white p-3 rounded-xl"
+                    className="w-full justify-between bg-black/20 hover:bg-black/40 text-white p-3 rounded-xl"
                   >
                     <div className="flex items-center space-x-3">
                       <span className="text-xl">{token.icon}</span>
