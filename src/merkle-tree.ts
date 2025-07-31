@@ -16,17 +16,26 @@ export class MerkleTree {
             return this.leaves[0];
         }
         
-        if (this.leaves.length === 2) {
-            return this.hashPair(this.leaves[0], this.leaves[1]);
+        // Build the tree from bottom up
+        let currentLevel = [...this.leaves];
+        
+        while (currentLevel.length > 1) {
+            const nextLevel: string[] = [];
+            
+            for (let i = 0; i < currentLevel.length; i += 2) {
+                if (i + 1 < currentLevel.length) {
+                    // Hash pair of nodes
+                    nextLevel.push(this.hashPair(currentLevel[i], currentLevel[i + 1]));
+                } else {
+                    // Odd number of nodes, promote the last one
+                    nextLevel.push(currentLevel[i]);
+                }
+            }
+            
+            currentLevel = nextLevel;
         }
         
-        if (this.leaves.length === 3) {
-            // For 3 leaves: hash first two, then hash result with third
-            const intermediate = this.hashPair(this.leaves[0], this.leaves[1]);
-            return this.hashPair(intermediate, this.leaves[2]);
-        }
-        
-        throw new Error('Only 1-3 leaves supported');
+        return currentLevel[0];
     }
     
     private hashPair(a: string, b: string): string {
@@ -50,23 +59,39 @@ export class MerkleTree {
             return [];
         }
         
-        if (this.leaves.length === 2) {
-            return [this.leaves[index === 0 ? 1 : 0]];
-        }
+        const proof: string[] = [];
+        let currentIndex = index;
+        let currentLevel = [...this.leaves];
         
-        if (this.leaves.length === 3) {
-            if (index === 0) {
-                return [this.leaves[1], this.leaves[2]];
-            } else if (index === 1) {
-                return [this.leaves[0], this.leaves[2]];
-            } else if (index === 2) {
-                // For leaf 2, proof is the intermediate hash of leaves 0 and 1
-                const intermediate = this.hashPair(this.leaves[0], this.leaves[1]);
-                return [intermediate];
+        while (currentLevel.length > 1) {
+            const nextLevel: string[] = [];
+            const nextProof: string[] = [];
+            
+            for (let i = 0; i < currentLevel.length; i += 2) {
+                if (i + 1 < currentLevel.length) {
+                    // Hash pair of nodes
+                    nextLevel.push(this.hashPair(currentLevel[i], currentLevel[i + 1]));
+                    
+                    // Add to proof if this pair contains our target
+                    if (i === currentIndex || i + 1 === currentIndex) {
+                        const siblingIndex = i === currentIndex ? i + 1 : i;
+                        nextProof.push(currentLevel[siblingIndex]);
+                    }
+                } else {
+                    // Odd number of nodes, promote the last one
+                    nextLevel.push(currentLevel[i]);
+                    if (i === currentIndex) {
+                        // No sibling for the last node
+                    }
+                }
             }
+            
+            proof.push(...nextProof);
+            currentLevel = nextLevel;
+            currentIndex = Math.floor(currentIndex / 2);
         }
         
-        throw new Error('Unsupported');
+        return proof;
     }
     
     public verifyProof(proof: string[], leaf: string, root: string): boolean {

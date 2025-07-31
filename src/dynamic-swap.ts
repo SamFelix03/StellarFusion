@@ -9,9 +9,9 @@ import {
   Keypair, 
   TransactionBuilder, 
   Networks, 
-  Operation,
-  Asset,
-  Contract,
+  Operation, 
+  Asset, 
+  Contract, 
   SorobanRpc,
   Address,
   nativeToScVal,
@@ -31,6 +31,7 @@ interface ChainConfig {
     decimals: number;
   };
   factoryAddress: string;
+  lopAddress?: string; // Optional LOP address for ETH/EVM chains
   tokens: {
     [symbol: string]: {
       name: string;
@@ -1252,8 +1253,6 @@ class DynamicSwapInterface {
       hashedSecret = ethers.utils.sha256(secretBytes);
     }
     
-    const orderId = ethers.utils.id(hashedSecret + Date.now().toString()).slice(0, 10);
-    
     // Time windows (in seconds from now) - use system time
     const now = Math.floor(Date.now() / 1000);
     const withdrawalStart = now + 60; // 1 minute from now
@@ -1282,6 +1281,14 @@ class DynamicSwapInterface {
       console.log(`   Source per part: ${ethers.utils.formatUnits(srcAmountPerPart, srcTokenConfig.decimals)} ${config.sourceToken}`);
       console.log(`   Destination per part: ${ethers.utils.formatUnits(dstAmountPerPart, dstTokenConfig.decimals)} ${config.destinationToken}`);
     }
+
+    // Generate orderId using proper BigNumber format
+    const orderId = ethers.utils.keccak256(
+      ethers.utils.defaultAbiCoder.encode(
+        ['string', 'address', 'string', 'uint256', 'string'],
+        [hashedSecret + Date.now().toString(), buyerAddress, 'ETH->XLM', srcAmount, hashedSecret]
+      )
+    );
 
     return {
       orderId,
@@ -1563,12 +1570,14 @@ class DynamicSwapInterface {
 
     // Create source escrow using unified function
     const srcFactoryContract = new ethers.Contract(srcFactoryAddress, factoryABI, resolverSigner);
+    const srcLopContract = new ethers.Contract(this.chains[config.sourceChain].lopAddress!, lopABI, resolverSigner);
     
-    console.log(`🔍 DEBUG - createSrcEscrow parameters:`);
-    console.log(`   hashedSecret: ${order.hashedSecret}`);
+    console.log(`🔍 DEBUG - fillOrder parameters:`);
+    console.log(`   orderHash: ${order.orderId}`);
+    console.log(`   maker: ${buyerAddress}`);
     console.log(`   recipient: ${resolverSigner.address}`);
-    console.log(`   buyer: ${buyerAddress}`);
     console.log(`   tokenAmount: ${segment.srcAmount.toString()}`);
+    console.log(`   hashedSecret: ${order.hashedSecret}`);
     console.log(`   withdrawalStart: ${order.withdrawalStart}`);
     console.log(`   publicWithdrawalStart: ${order.publicWithdrawalStart}`);
     console.log(`   cancellationStart: ${order.cancellationStart}`);
@@ -1578,11 +1587,12 @@ class DynamicSwapInterface {
     console.log(`   value: ${ethers.utils.parseUnits("0.001", "ether").toString()}`);
     
     // Try using the exact same approach as the working case
-    const createSrcTx = await srcFactoryContract.createSrcEscrow(
-      order.hashedSecret,  // Use merkleRoot instead of order.hashedSecret for consistency
-      resolverSigner.address, // recipient is resolver
-      buyerAddress, // buyer provides the tokens
+    const createSrcTx = await srcLopContract.fillOrder(
+      order.orderId,
+      buyerAddress, // maker (buyer who has WETH)
+      resolverSigner.address, // recipient (resolver gets the WETH)
       segment.srcAmount,
+      order.hashedSecret,
       order.withdrawalStart,
       order.publicWithdrawalStart,
       order.cancellationStart,
@@ -1864,13 +1874,15 @@ class DynamicSwapInterface {
   private async executeSourceEscrowOnly(config: SwapConfig, order: Order, resolverSigner: ethers.Wallet) {
     const srcFactoryAddress = this.chains[config.sourceChain].factoryAddress;
     const srcFactoryContract = new ethers.Contract(srcFactoryAddress, factoryABI, resolverSigner);
+    const srcLopContract = new ethers.Contract(this.chains[config.sourceChain].lopAddress!, lopABI, resolverSigner);
 
     console.log("Creating source escrow...");
-    const createSrcEscrowTx = await srcFactoryContract.createSrcEscrow(
-      order.hashedSecret,
-      resolverSigner.address, // recipient is resolver
-      order.buyerAddress, // buyer provides the tokens
+    const createSrcEscrowTx = await srcLopContract.fillOrder(
+      order.orderId,
+      order.buyerAddress, // maker (buyer who has WETH)
+      resolverSigner.address, // recipient (resolver gets the WETH)
       order.srcAmount,
+      order.hashedSecret,
       order.withdrawalStart,
       order.publicWithdrawalStart,
       order.cancellationStart,
@@ -1914,12 +1926,14 @@ class DynamicSwapInterface {
     // Step 1: Create source escrow
     console.log("Creating source escrow...");
     const srcFactoryContract = new ethers.Contract(srcFactoryAddress, factoryABI, resolverSigner);
+    const srcLopContract = new ethers.Contract(this.chains[config.sourceChain].lopAddress!, lopABI, resolverSigner);
     
-    const createSrcEscrowTx = await srcFactoryContract.createSrcEscrow(
-      order.hashedSecret,
-      resolverSigner.address, // recipient is resolver
-      order.buyerAddress, // buyer provides the tokens
+    const createSrcEscrowTx = await srcLopContract.fillOrder(
+      order.orderId,
+      order.buyerAddress, // maker (buyer who has WETH)
+      resolverSigner.address, // recipient (resolver gets the WETH)
       order.srcAmount,
+      order.hashedSecret,
       order.withdrawalStart,
       order.publicWithdrawalStart,
       order.cancellationStart,
@@ -2283,12 +2297,14 @@ class DynamicSwapInterface {
     console.log(`\n📝 Creating EVM source escrow for part ${segment.index}`);
     const srcFactoryAddress = this.chains[config.sourceChain].factoryAddress;
     const srcFactoryContract = new ethers.Contract(srcFactoryAddress, factoryABI, resolverSigner);
+    const srcLopContract = new ethers.Contract(this.chains[config.sourceChain].lopAddress!, lopABI, resolverSigner);
     
-    const createSrcTx = await srcFactoryContract.createSrcEscrow(
-      order.hashedSecret,
-      resolverSigner.address, // recipient is resolver
-      buyerAddress, // buyer provides the tokens
+    const createSrcTx = await srcLopContract.fillOrder(
+      order.orderId,
+      buyerAddress, // maker (buyer who has WETH)
+      resolverSigner.address, // recipient (resolver gets the WETH)
       segment.srcAmount,
+      order.hashedSecret,
       order.withdrawalStart,
       order.publicWithdrawalStart,
       order.cancellationStart,
@@ -2478,6 +2494,10 @@ class DynamicSwapInterface {
 const factoryABI = [
   "function createSrcEscrow(bytes32 hashedSecret, address recipient, address buyer, uint256 tokenAmount, uint256 withdrawalStart, uint256 publicWithdrawalStart, uint256 cancellationStart, uint256 publicCancellationStart, uint256 partIndex, uint16 totalParts) external payable",
   "function createDstEscrow(bytes32 hashedSecret, address recipient, uint256 tokenAmount, uint256 withdrawalStart, uint256 publicWithdrawalStart, uint256 cancellationStart, uint256 partIndex, uint16 totalParts) external payable"
+];
+
+const lopABI = [
+  "function fillOrder(bytes32 orderHash, address maker, address recipient, uint256 tokenAmount, bytes32 hashedSecret, uint256 withdrawalStart, uint256 publicWithdrawalStart, uint256 cancellationStart, uint256 publicCancellationStart, uint256 partIndex, uint16 totalParts) external payable"
 ];
 
 const escrowABI = [
