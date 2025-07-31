@@ -59,7 +59,6 @@ contract HashLockedEscrowFactory is ReentrancyGuard {
     // Partial fill tracking
     mapping(bytes32 => mapping(uint256 => bool)) public partialFillsUsed; // hashLock => index => used
     mapping(bytes32 => uint256) public partialFillsCount; // hashLock => filled count
-    mapping(bytes32 => uint256) public lastUsedIndex; // hashLock => last used secret index
 
     event SrcEscrowCreated(
         address indexed creator,
@@ -101,13 +100,6 @@ contract HashLockedEscrowFactory is ReentrancyGuard {
         WETH = wethAddress;
     }
     
-    function validateSecretIndex(bytes32 hashLock, uint256 secretIndex) internal view returns (bool) {
-        // Ensure sequential usage: new index should be lastUsedIndex + 1 (or 0 for first use)
-        if (partialFillsCount[hashLock] == 0) {
-            return secretIndex == 0; // First secret must be index 0
-        }
-        return secretIndex == lastUsedIndex[hashLock] + 1;
-    }
 
     function createSrcEscrow(
         bytes32 hashedSecret,
@@ -138,15 +130,9 @@ contract HashLockedEscrowFactory is ReentrancyGuard {
             require(partIndex < totalParts, "Invalid part index");
             require(!partialFillsUsed[hashedSecret][partIndex], "Part already used");
             
-            // For partial fills, validate sequential order
-            if (PartialFillHelper.isPartialFillOrder(hashedSecret)) {
-                require(validateSecretIndex(hashedSecret, partIndex), "Invalid secret index order");
-            }
-            
             // Mark this part as used and update tracking
             partialFillsUsed[hashedSecret][partIndex] = true;
             partialFillsCount[hashedSecret]++;
-            lastUsedIndex[hashedSecret] = partIndex;
         }
 
         // Create enhanced SourceEscrow that supports both modes
