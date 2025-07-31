@@ -89,7 +89,6 @@ class Maker {
     console.log('\n📝 Creating order...');
     
     const endpoint = this.mode === 'partialfill' ? '/partialfill' : '/create';
-    const secret = this.secrets[0]; // Use first secret for order creation
     
     const orderData = {
       orderId: `order_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
@@ -101,8 +100,6 @@ class Maker {
       srcAmount: "1",
       dstAmount: "3900",
       market_price: "3900",
-      hashedSecret: secret.hashedSecret,
-      secret: secret.secret,
       slippage: "0.1"
     };
 
@@ -267,10 +264,16 @@ class Maker {
     console.log(`\n🔍 Verifying winner: ${winner}`);
     
     const verificationData = {
-      escrowAddress: "0x821E049c0d103230BE6203f5ad9E9c2F7948A95B",
-      targetAddress: "0x7b79995e5f793a07bc00c21412e50ecae098e7f9",
-      xlmaddress: "GA2HENU4XKUUKYJRL6B3PNX7CB2WYO3F5JXLQZNBQV2VLZ27KB63L3PV"
+      orderId: this.orderId
     };
+
+    // Add segmentId for partial fill orders
+    if (this.mode === 'partialfill') {
+      const winnerInfo = this.winners.get(winnerKey);
+      if (winnerInfo && winnerInfo.segmentId) {
+        verificationData.segmentId = winnerInfo.segmentId;
+      }
+    }
 
     try {
       const response = await axios.post(`${this.baseUrl}/verify`, verificationData);

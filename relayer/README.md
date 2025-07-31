@@ -73,8 +73,6 @@ POST /create
   "dstToken": "XLM",
   "srcAmount": "1",
   "dstAmount": "3900",
-  "hashedSecret": "0x...",
-  "secret": "0x...",
   "slippage": "0.1"
 }
 
@@ -89,26 +87,23 @@ POST /partialfill
   "dstToken": "XLM",
   "srcAmount": "1",
   "dstAmount": "3900",
-  "hashedSecret": "0x...",
-  "secret": "0x...",
   "slippage": "0.1"
 }
-```
 
-### Verification
-```bash
-# Verify transactions
+# Verify transactions (Normal order)
 POST /verify
 {
-  "escrowAddress": "0x821E049c0d103230BE6203f5ad9E9c2F7948A95B",
-  "targetAddress": "0x7b79995e5f793a07bc00c21412e50ecae098e7f9",
-  "xlmaddress": "GA2HENU4XKUUKYJRL6B3PNX7CB2WYO3F5JXLQZNBQV2VLZ27KB63L3PV"
+  "orderId": "unique_id"
 }
-```
 
-### Segment Secrets (Partial Fill)
-```bash
-# Update segment secrets
+# Verify transactions (Partial fill order)
+POST /verify
+{
+  "orderId": "unique_id",
+  "segmentId": 1
+}
+
+# Update segment secrets (Partial fill orders only)
 POST /orders/:orderId/segment-secrets
 {
   "segmentSecrets": [
@@ -119,6 +114,16 @@ POST /orders/:orderId/segment-secrets
     },
     {
       "segmentId": 2,
+      "secret": "0x...",
+      "hashedSecret": "0x..."
+    },
+    {
+      "segmentId": 3,
+      "secret": "0x...",
+      "hashedSecret": "0x..."
+    },
+    {
+      "segmentId": 4,
       "secret": "0x...",
       "hashedSecret": "0x..."
     }

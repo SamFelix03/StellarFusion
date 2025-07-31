@@ -948,17 +948,15 @@ app.post('/partialfill', async (req, res) => {
       dstToken,
       srcAmount,
       dstAmount,
-      hashedSecret,
-      secret,
       slippage,
       market_price
     } = req.body;
 
     // Validate required fields
-    if (!orderId || !buyerAddress || !hashedSecret || !secret) {
+    if (!orderId || !buyerAddress) {
       return res.status(400).json({
         success: false,
-        error: 'Missing required fields: orderId, buyerAddress, hashedSecret, secret'
+        error: 'Missing required fields: orderId, buyerAddress'
       });
     }
 
@@ -972,8 +970,6 @@ app.post('/partialfill', async (req, res) => {
       dstToken: dstToken || '',
       srcAmount: srcAmount?.toString() || '',
       dstAmount: dstAmount?.toString() || '',
-      hashedSecret,
-      secret,
       slippage: slippage?.toString() || '0.005', // Default 0.5% slippage
       market_price: market_price?.toString() || '3900', // Default market price
       orderType: 'partialfill', // Identify this as a partial fill order
@@ -1037,8 +1033,6 @@ app.post('/create', async (req, res) => {
       dstToken,
       srcAmount,
       dstAmount,
-      hashedSecret,
-      secret,
       withdrawalStart,
       publicWithdrawalStart,
       cancellationStart,
@@ -1048,10 +1042,10 @@ app.post('/create', async (req, res) => {
     } = req.body;
 
     // Validate required fields
-    if (!orderId || !buyerAddress || !hashedSecret || !secret) {
+    if (!orderId || !buyerAddress) {
       return res.status(400).json({
         success: false,
-        error: 'Missing required fields: orderId, buyerAddress, hashedSecret, secret'
+        error: 'Missing required fields: orderId, buyerAddress'
       });
     }
 
@@ -1065,8 +1059,6 @@ app.post('/create', async (req, res) => {
       dstToken: dstToken || '',
       srcAmount: srcAmount?.toString() || '',
       dstAmount: dstAmount?.toString() || '',
-      hashedSecret,
-      secret,
       slippage: slippage?.toString() || '0.005', // Default 0.5% slippage
       market_price: market_price?.toString() || '3900', // Default market price
       orderType: 'normal', // Identify this as a normal order
@@ -1367,27 +1359,97 @@ app.post('/orders/:orderId/segment-secrets', async (req, res) => {
   }
 });
 
-// POST /verify endpoint - Verify transactions using ethchecker and xlmchecker logic
+// POST /verify endpoint - Verify transactions using orderId and optional segmentId
 app.post('/verify', async (req, res) => {
   try {
     const {
-      escrowAddress,
-      targetAddress,
-      xlmaddress
+      orderId,
+      segmentId
     } = req.body;
 
     // Validate required fields
-    if (!escrowAddress || !targetAddress || !xlmaddress) {
+    if (!orderId) {
       return res.status(400).json({
         success: false,
-        error: 'Missing required fields: escrowAddress, targetAddress, xlmaddress'
+        error: 'Missing required field: orderId'
       });
     }
 
-    console.log(`🔍 Starting verification process...`);
-    console.log(`📊 Escrow Address: ${escrowAddress}`);
-    console.log(`📊 Target Address: ${targetAddress}`);
-    console.log(`📊 XLM Address: ${xlmaddress}`);
+    console.log(`🔍 Starting verification process for order: ${orderId}`);
+    if (segmentId) {
+      console.log(`📊 Segment ID: ${segmentId}`);
+    }
+
+    // Get order from DynamoDB
+    const getParams = {
+      TableName: TABLE_NAME,
+      Key: { orderId: orderId }
+    };
+
+    const orderResult = await dynamodb.get(getParams).promise();
+    if (!orderResult.Item) {
+      return res.status(404).json({
+        success: false,
+        error: 'Order not found'
+      });
+    }
+
+    const order = orderResult.Item;
+    console.log(`📊 Order Type: ${order.orderType}`);
+    console.log(`📊 Order Status: ${order.status}`);
+
+    // Validate segmentId for partial fill orders
+    if (order.orderType === 'partialfill') {
+      if (!segmentId) {
+        return res.status(400).json({
+          success: false,
+          error: 'segmentId is required for partial fill orders'
+        });
+      }
+
+      if (segmentId < 1 || segmentId > 4) {
+        return res.status(400).json({
+          success: false,
+          error: 'segmentId must be between 1 and 4'
+        });
+      }
+
+      // Check if segment secrets exist
+      let segmentSecrets = [];
+      if (order.segmentSecrets) {
+        try {
+          segmentSecrets = JSON.parse(order.segmentSecrets);
+        } catch (e) {
+          console.log('Could not parse segmentSecrets for order:', orderId);
+        }
+      }
+
+      if (segmentSecrets.length === 0) {
+        return res.status(400).json({
+          success: false,
+          error: 'Segment secrets not found for this order. Maker needs to update segment secrets first.'
+        });
+      }
+
+      const segmentSecret = segmentSecrets.find(s => s.segmentId === segmentId);
+      if (!segmentSecret) {
+        return res.status(400).json({
+          success: false,
+          error: `Secret for segment ${segmentId} not found`
+        });
+      }
+
+      console.log(`🔐 Found secret for segment ${segmentId}`);
+      console.log(`📊 Hashed Secret: ${segmentSecret.hashedSecret}`);
+    } else if (order.orderType === 'normal') {
+      if (segmentId) {
+        return res.status(400).json({
+          success: false,
+          error: 'segmentId should not be provided for normal orders'
+        });
+      }
+      console.log(`📊 Normal order - no segment secrets needed`);
+    }
 
     // Import required modules
     const axios = require('axios');
@@ -1405,6 +1467,10 @@ app.post('/verify', async (req, res) => {
     // === ETHEREUM CHECK (from ethchecker.js) ===
     console.log(`\n🔗 Checking Ethereum transactions...`);
     try {
+      // Use buyer address from order as target address
+      const targetAddress = order.buyerAddress;
+      const escrowAddress = "0x821E049c0d103230BE6203f5ad9E9c2F7948A95B"; // Default escrow address
+      
       console.log(`📊 Using escrow address: ${escrowAddress.toLowerCase()}`);
       console.log(`📊 Looking for transactions from: ${targetAddress.toLowerCase()}`);
       console.log(`📊 Target amount: ${targetAmount} ETH`);
@@ -1513,6 +1579,9 @@ app.post('/verify', async (req, res) => {
     // === STELLAR CHECK (from xlmchecker.js) ===
     console.log(`\n⭐ Checking Stellar transactions...`);
     try {
+      // Use a default XLM address for testing
+      const xlmaddress = "GA2HENU4XKUUKYJRL6B3PNX7CB2WYO3F5JXLQZNBQV2VLZ27KB63L3PV";
+      
       // Test connection first
       const horizonResponse = await fetch(stellarTestnetHorizon);
       if (!horizonResponse.ok) {
@@ -1591,6 +1660,9 @@ app.post('/verify', async (req, res) => {
         success: true,
         message: 'Verification successful - At least one test case passed',
         data: {
+          orderId: orderId,
+          segmentId: segmentId || null,
+          orderType: order.orderType,
           ethResult: ethResult,
           xlmResult: xlmResult,
           overallResult: true,
@@ -1598,14 +1670,14 @@ app.post('/verify', async (req, res) => {
             ethereum: {
               checked: true,
               passed: ethResult,
-              escrowAddress: escrowAddress,
-              targetAddress: targetAddress,
+              escrowAddress: "0x821E049c0d103230BE6203f5ad9E9c2F7948A95B",
+              targetAddress: order.buyerAddress,
               targetAmount: targetAmount
             },
             stellar: {
               checked: true,
               passed: xlmResult,
-              xlmAddress: xlmaddress,
+              xlmAddress: "GA2HENU4XKUUKYJRL6B3PNX7CB2WYO3F5JXLQZNBQV2VLZ27KB63L3PV",
               contractAddress: contractAddress,
               timeFilter: '5 minutes',
               effectFilter: 'account_debited'
@@ -1618,6 +1690,9 @@ app.post('/verify', async (req, res) => {
         success: false,
         error: 'Verification failed - No test cases passed',
         data: {
+          orderId: orderId,
+          segmentId: segmentId || null,
+          orderType: order.orderType,
           ethResult: ethResult,
           xlmResult: xlmResult,
           overallResult: false,
@@ -1625,14 +1700,14 @@ app.post('/verify', async (req, res) => {
             ethereum: {
               checked: true,
               passed: ethResult,
-              escrowAddress: escrowAddress,
-              targetAddress: targetAddress,
+              escrowAddress: "0x821E049c0d103230BE6203f5ad9E9c2F7948A95B",
+              targetAddress: order.buyerAddress,
               targetAmount: targetAmount
             },
             stellar: {
               checked: true,
               passed: xlmResult,
-              xlmAddress: xlmaddress,
+              xlmAddress: "GA2HENU4XKUUKYJRL6B3PNX7CB2WYO3F5JXLQZNBQV2VLZ27KB63L3PV",
               contractAddress: contractAddress,
               timeFilter: '5 minutes',
               effectFilter: 'account_debited'
