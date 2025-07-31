@@ -22,8 +22,7 @@ import {
   X,
   ArrowLeft,
 } from "lucide-react"
-import LiquidChrome from "./components/LiquidChrome"
-import Iridescence from "./components/Iridescence"
+import Dither from "./components/Dither"
 
 interface Auction {
   id: string
@@ -208,13 +207,17 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
 
   return (
     <div className="min-h-screen bg-black text-white relative overflow-hidden">
-      {/* LiquidChrome Background */}
+      {/* Dither Background */}
       <div className="fixed inset-0 z-0">
-        <LiquidChrome
-          baseColor={[0.1, 0.1, 0.1]}
-          speed={0.05}
-          amplitude={0.6}
-          interactive={false}
+        <Dither
+          waveColor={[0.5, 0.5, 0.5]}
+          disableAnimation={false}
+          enableMouseInteraction={true}
+          mouseRadius={0.3}
+          colorNum={4}
+          waveAmplitude={0.3}
+          waveFrequency={3}
+          waveSpeed={0.05}
         />
       </div>
 
@@ -284,7 +287,7 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
               <div className="relative overflow-hidden rounded-2xl bg-white/40 backdrop-blur-xl border border-white/50 p-6 shadow-lg hover:shadow-xl transition-all duration-500">
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-sm font-medium text-gray-600 mb-2">{stat.label}</p>
+                    <p className="text-sm font-medium text-gray-800 mb-2">{stat.label}</p>
                     <motion.p
                       className="text-3xl font-bold text-black"
                       initial={{ opacity: 0 }}

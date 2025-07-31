@@ -137,6 +137,7 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
     try {
       const response = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=ethereum,stellar&vs_currencies=usd')
       const data = await response.json()
+      console.log('Fetched price data:', data)
       setPriceData(data)
     } catch (error) {
       console.error('Failed to fetch prices:', error)
@@ -237,12 +238,24 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
 
   const handleFromAmountChange = (value: string) => {
     const numValue = parseFloat(value) || 0
-    const formattedValue = numValue.toFixed(4)
+    
+    // Calculate real conversion rate based on price data
+    let conversionRate = 1.5 // fallback rate
+    if (swapState.fromToken && swapState.toToken && priceData) {
+      const fromTokenId = swapState.fromToken.coingeckoId
+      const toTokenId = swapState.toToken.coingeckoId
+      
+      if (fromTokenId && toTokenId && priceData[fromTokenId] && priceData[toTokenId]) {
+        conversionRate = priceData[fromTokenId].usd / priceData[toTokenId].usd
+        console.log(`Conversion rate: 1 ${swapState.fromToken.symbol} = ${conversionRate} ${swapState.toToken.symbol}`)
+        console.log(`Price data: ETH=${priceData.ethereum?.usd}, XLM=${priceData.stellar?.usd}`)
+      }
+    }
     
     setSwapState(prev => ({
       ...prev,
       fromAmount: value,
-      toAmount: value ? (numValue * 1.5).toFixed(4) : "" // Mock conversion rate with 4 decimal places
+      toAmount: value ? (numValue * conversionRate).toFixed(4) : ""
     }))
   }
 
@@ -271,10 +284,10 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
 
   return (
     <div className="min-h-screen bg-black text-white relative overflow-hidden">
-      {/* Aurora Background */}
+      {/* Aurora Background with White Colors */}
       <div className="fixed inset-0 z-0">
         <Aurora 
-          colorStops={["#FF6B9D", "#4ECDC4", "#45B7D1"]}
+          colorStops={["#FFFFFF", "#F8F9FA", "#E9ECEF", "#FFFFFF"]}
           amplitude={1.2}
           blend={0.6}
           speed={0.3}
@@ -289,15 +302,15 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
           transition={{ duration: 0.6 }}
           className="fixed top-8 left-8 z-50"
         >
-          <Button
-            variant="outline"
-            size="sm"
-            className="border-white/20 text-white hover:bg-white/10 backdrop-blur-sm bg-transparent"
-            onClick={onBackToHome}
-          >
-            <ArrowLeft className="w-4 h-4 mr-2" />
-            Back to Home
-          </Button>
+                      <Button
+              variant="outline"
+              size="sm"
+              className="border-white/20 text-white hover:bg-white/10 backdrop-blur-sm bg-transparent"
+              onClick={onBackToHome}
+            >
+              <ArrowLeft className="w-4 h-4 mr-2" />
+              Back to Home
+            </Button>
         </motion.div>
       )}
 
@@ -324,18 +337,17 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
               </div>
             </div>
 
-            {/* Wallet Connection */}
+            {/* Wallet Connection Status */}
             {!isConnected ? (
               <div className="text-center py-8">
                 <Wallet className="w-12 h-12 mx-auto mb-4 text-white/60" />
-                <h3 className="text-lg font-semibold mb-2">Connect Wallet</h3>
-                <p className="text-white/60 mb-6">Connect your wallet to start swapping tokens</p>
+                <h3 className="text-lg font-semibold mb-2 text-white">Wallet Not Connected</h3>
+                <p className="text-white/60 mb-6">Please connect your wallet from the home page to start swapping tokens</p>
                 <Button
-                  onClick={connect}
-                  disabled={isLoading}
+                  onClick={onBackToHome}
                   className="bg-white text-black hover:bg-gray-100 font-semibold px-8 py-3"
                 >
-                  {isLoading ? "Connecting..." : "Connect Wallet"}
+                  Go to Home
                 </Button>
               </div>
             ) : (
@@ -359,32 +371,32 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
                     </div>
                   </div>
                   
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center space-x-3">
-                      <Button
-                        variant="ghost"
-                        onClick={() => openTokenSelector("from")}
-                        className="flex items-center space-x-2 bg-white/10 hover:bg-white/20 text-white p-2 rounded-xl"
-                      >
-                        <span className="text-xl">{swapState.fromToken?.icon || "🔷"}</span>
-                        <span className="font-semibold">{swapState.fromToken?.symbol || "Select"}</span>
-                        <ChevronDown className="w-4 h-4" />
-                      </Button>
-                    </div>
-                    
-                    <div className="text-right">
-                      <Input
-                        type="number"
-                        value={swapState.fromAmount}
-                        onChange={(e) => handleFromAmountChange(e.target.value)}
-                        placeholder="0.0"
-                        className="text-right text-2xl font-bold bg-transparent border-none text-white placeholder-white/40 focus:ring-0"
-                      />
-                      <div className="text-sm text-white/60">
-                        ~${currentUsdValue.toFixed(2)}
-                      </div>
-                    </div>
-                  </div>
+                                     <div className="flex items-center justify-between">
+                     <div className="flex items-center space-x-3 min-w-0 flex-1">
+                       <Button
+                         variant="ghost"
+                         onClick={() => openTokenSelector("from")}
+                         className="flex items-center space-x-2 bg-white/10 hover:bg-white/20 text-white p-2 rounded-xl flex-shrink-0"
+                       >
+                         <span className="text-xl">{swapState.fromToken?.icon || "🔷"}</span>
+                         <span className="font-semibold">{swapState.fromToken?.symbol || "Select"}</span>
+                         <ChevronDown className="w-4 h-4" />
+                       </Button>
+                     </div>
+                     
+                     <div className="text-right min-w-0 flex-1 ml-4">
+                       <Input
+                         type="number"
+                         value={swapState.fromAmount}
+                         onChange={(e) => handleFromAmountChange(e.target.value)}
+                         placeholder="0.0"
+                         className="text-right text-2xl font-bold bg-transparent border-none text-white placeholder-white/40 focus:ring-0 w-full"
+                       />
+                       <div className="text-sm text-white/60 truncate">
+                         ~${currentUsdValue.toFixed(2)}
+                       </div>
+                     </div>
+                   </div>
                   
                   <div className="mt-2 text-xs text-white/40">
                     on {swapState.fromChain}
@@ -411,37 +423,37 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
                     </span>
                   </div>
                   
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center space-x-3">
-                      <Button
-                        variant="ghost"
-                        onClick={() => openTokenSelector("to")}
-                        className="flex items-center space-x-2 bg-white/10 hover:bg-white/20 text-white p-2 rounded-xl"
-                      >
-                        <span className="text-xl">{swapState.toToken?.icon || "⭐"}</span>
-                        <span className="font-semibold">{swapState.toToken?.symbol || "Select"}</span>
-                        <ChevronDown className="w-4 h-4" />
-                      </Button>
-                    </div>
-                    
-                    <div className="text-right">
-                      <div className="text-2xl font-bold text-white">
-                        {swapState.toAmount || "0.0"}
-                      </div>
-                      <div className="text-sm text-white/60">
-                        ~${(() => {
-                          if (swapState.toAmount && swapState.toToken && priceData) {
-                            const amount = parseFloat(swapState.toAmount)
-                            const tokenId = swapState.toToken.coingeckoId
-                            if (tokenId && priceData[tokenId]) {
-                              return (amount * priceData[tokenId].usd).toFixed(2)
-                            }
-                          }
-                          return "0.00"
-                        })()}
-                      </div>
-                    </div>
-                  </div>
+                                     <div className="flex items-center justify-between">
+                     <div className="flex items-center space-x-3 min-w-0 flex-1">
+                       <Button
+                         variant="ghost"
+                         onClick={() => openTokenSelector("to")}
+                         className="flex items-center space-x-2 bg-white/10 hover:bg-white/20 text-white p-2 rounded-xl flex-shrink-0"
+                       >
+                         <span className="text-xl">{swapState.toToken?.icon || "⭐"}</span>
+                         <span className="font-semibold">{swapState.toToken?.symbol || "Select"}</span>
+                         <ChevronDown className="w-4 h-4" />
+                       </Button>
+                     </div>
+                     
+                     <div className="text-right min-w-0 flex-1 ml-4">
+                       <div className="text-2xl font-bold text-white truncate">
+                         {swapState.toAmount || "0.0"}
+                       </div>
+                       <div className="text-sm text-white/60 truncate">
+                         ~${(() => {
+                           if (swapState.toAmount && swapState.toToken && priceData) {
+                             const amount = parseFloat(swapState.toAmount)
+                             const tokenId = swapState.toToken.coingeckoId
+                             if (tokenId && priceData[tokenId]) {
+                               return (amount * priceData[tokenId].usd).toFixed(2)
+                             }
+                           }
+                           return "0.00"
+                         })()}
+                       </div>
+                     </div>
+                   </div>
                   
                   <div className="mt-2 text-xs text-white/40">
                     on {swapState.toChain}
@@ -451,10 +463,18 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
                 {/* Exchange Rate */}
                 <div className="flex items-center justify-between text-sm text-white/60 mb-6">
                   <span>
-                    {swapState.fromAmount && swapState.toAmount && swapState.fromToken && swapState.toToken
-                      ? `1 ${swapState.fromToken.symbol} = ${(parseFloat(swapState.toAmount) / parseFloat(swapState.fromAmount)).toFixed(4)} ${swapState.toToken.symbol}`
+                    {swapState.fromToken && swapState.toToken && priceData
+                      ? (() => {
+                          const fromTokenId = swapState.fromToken.coingeckoId
+                          const toTokenId = swapState.toToken.coingeckoId
+                          if (fromTokenId && toTokenId && priceData[fromTokenId] && priceData[toTokenId]) {
+                            const rate = priceData[fromTokenId].usd / priceData[toTokenId].usd
+                            return `1 ${swapState.fromToken.symbol} = ${rate.toFixed(2)} ${swapState.toToken.symbol}`
+                          }
+                          return `1 ${swapState.fromToken.symbol} = 1.5 ${swapState.toToken.symbol}`
+                        })()
                       : `1 ${swapState.fromToken?.symbol || "ETH"} = 1.5 ${swapState.toToken?.symbol || "XLM"}`
-                    } ~$1.50
+                    }
                   </span>
                   <div className="flex items-center space-x-1">
                     <span className="text-green-400">Free</span>
@@ -487,14 +507,14 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
                   <div className="text-sm text-white/60">
                     Connected: {address?.slice(0, 6)}...{address?.slice(-4)}
                   </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={disconnect}
-                    className="text-xs text-white/40 hover:text-white mt-2"
-                  >
-                    Disconnect
-                  </Button>
+                                     <Button
+                     variant="ghost"
+                     size="sm"
+                     onClick={onBackToHome}
+                     className="text-xs text-white/40 hover:text-white hover:bg-white/10 mt-2"
+                   >
+                     Manage Wallet
+                   </Button>
                 </div>
               </>
             )}
