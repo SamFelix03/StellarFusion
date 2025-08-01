@@ -1219,7 +1219,7 @@ export class ResolverContractManager {
   }
 
   // Request relayer verification of escrows and timelock
-  private async requestRelayerVerification(
+  async requestRelayerVerification(
     params: RelayerVerificationParams
   ): Promise<ExecutionResult & { verified?: boolean }> {
     try {
@@ -1268,7 +1268,7 @@ export class ResolverContractManager {
   }
 
   // Request secret from buyer via relayer
-  private async requestSecretFromBuyer(
+  async requestSecretFromBuyer(
     orderId: string,
     segmentId?: number
   ): Promise<ExecutionResult & { secret?: string }> {
@@ -1350,7 +1350,7 @@ export class ResolverContractManager {
   }
 
   // Notify relayer of resolver progress
-  private async notifyResolverProgress(
+  async notifyResolverProgress(
     orderId: string, 
     step: string, 
     details?: any, 
@@ -1381,7 +1381,7 @@ export class ResolverContractManager {
   }
 
   // Notify relayer of escrow creation
-  private async notifyEscrowCreated(
+  async notifyEscrowCreated(
     orderId: string,
     escrowType: 'source' | 'destination',
     escrowAddress: string,
@@ -1432,7 +1432,7 @@ export class ResolverContractManager {
   }
 
   // Notify relayer of withdrawal completion
-  private async notifyWithdrawalCompleted(
+  async notifyWithdrawalCompleted(
     orderId: string,
     withdrawalType: 'source' | 'destination',
     transactionHash: string,
@@ -1463,7 +1463,7 @@ export class ResolverContractManager {
   }
 
   // Notify relayer of order completion
-  private async notifyOrderCompleted(
+  async notifyOrderCompleted(
     orderId: string,
     segmentId?: number
   ): Promise<void> {

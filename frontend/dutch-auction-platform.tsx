@@ -294,11 +294,25 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
     }
   }, [isConnected])
 
-  const handleAuctionClick = (auction: Auction) => {
+  const handleAuctionClick = async (auction: Auction) => {
     console.log('🔍 Auction clicked:', auction.orderId, 'Type:', auction.auctionType)
     console.log('📊 Original auction buyer address:', auction.buyerAddress)
     
-    // Determine token info based on order data
+    // Fetch complete order data from database
+    const completeOrderData = await fetchCompleteOrderDetails(auction.orderId)
+    if (!completeOrderData) {
+      console.error('❌ Failed to fetch complete order data for auction:', auction.orderId)
+      toast({
+        title: "Error",
+        description: "Failed to fetch order details from database",
+        variant: "destructive"
+      })
+      return
+    }
+    
+    console.log('📊 Complete order data fetched for auction details:', completeOrderData)
+    
+    // Determine token info based on complete order data
     const tokenInfo = getTokenInfo(auction)
     
     const details: AuctionDetails = {
@@ -308,8 +322,15 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
       fromChain: tokenInfo.fromChain,
       toChain: tokenInfo.toChain,
       sourceAmount: parseFloat(tokenInfo.srcAmount) || 0,
-      // Ensure buyerAddress is properly included from the original auction data
-      buyerAddress: auction.buyerAddress || '',
+      // Use complete order data from database
+      buyerAddress: completeOrderData.buyerAddress,
+      srcChainId: completeOrderData.srcChainId,
+      dstChainId: completeOrderData.dstChainId,
+      srcToken: completeOrderData.srcToken,
+      dstToken: completeOrderData.dstToken,
+      srcAmount: completeOrderData.srcAmount,
+      dstAmount: completeOrderData.dstAmount,
+      hashedSecret: completeOrderData.hashedSecret || '',
       // Include other auction properties
       currentPrice: auction.auctionType === 'single' 
         ? (auction as SingleAuction).currentPrice 
@@ -325,8 +346,8 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
         : (auction as SegmentedAuction).slippage
     }
     
-    console.log('📊 Auction details:', details)
-    console.log('📊 Buyer address:', details.buyerAddress)
+    console.log('📊 Complete auction details:', details)
+    console.log('📊 Buyer address from database:', details.buyerAddress)
     if (details.auctionType === 'segmented') {
       console.log('📊 Segments in details:', (details as SegmentedAuction).segments)
     }
@@ -341,7 +362,10 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
     const orderData = orderDataMap.get(auction.orderId)
     
     if (orderData) {
-      // Use real order data
+      // Use real order data from database
+      console.log('📊 Using real order data from database:', orderData)
+      
+      // Get chain configurations
       const srcChain = chainsConfig[orderData.srcChainId as keyof typeof chainsConfig]
       const dstChain = chainsConfig[orderData.dstChainId as keyof typeof chainsConfig]
       
@@ -357,10 +381,15 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
           srcAmount: orderData.srcAmount,
           dstAmount: orderData.dstAmount
         }
+      } else {
+        console.warn('⚠️ Chain configuration not found for:', orderData.srcChainId, orderData.dstChainId)
       }
+    } else {
+      console.warn('⚠️ Order data not found in map for auction:', auction.orderId)
     }
     
-    // Fallback to defaults if order data not available
+    // Only use fallback if no order data available
+    console.log('⚠️ Using fallback token info for auction:', auction.orderId)
     const isPartialFill = auction.auctionType === 'segmented'
     return {
       tokenName: isPartialFill ? "Stellar Lumens" : "Ethereum",
@@ -642,14 +671,35 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
               label: "Total Volume",
               value: (() => {
                 const totalAmount = auctions.reduce((sum, a) => {
+                  // Get order data from database
+                  const orderData = orderDataMap.get(a.orderId)
+                  if (orderData && orderData.srcAmount) {
+                    return sum + parseFloat(orderData.srcAmount)
+                  }
+                  // Fallback to auction data if database data not available
                   const tokenInfo = getTokenInfo(a)
                   const amount = a.auctionType === 'single' 
                     ? (a as SingleAuction).sourceAmount 
                     : (a as SegmentedAuction).sourceAmount
                   return sum + (amount || 0)
                 }, 0)
-                const firstAuction = auctions[0]
-                const tokenSymbol = firstAuction ? getTokenInfo(firstAuction).tokenSymbol : 'TOKENS'
+                
+                // Get token symbol from first auction with database data
+                let tokenSymbol = 'TOKENS'
+                for (const auction of auctions) {
+                  const orderData = orderDataMap.get(auction.orderId)
+                  if (orderData && orderData.srcToken) {
+                    const srcChain = chainsConfig[orderData.srcChainId as keyof typeof chainsConfig]
+                    if (srcChain) {
+                      const token = srcChain.tokens[orderData.srcToken as keyof typeof srcChain.tokens]
+                      if (token) {
+                        tokenSymbol = token.symbol
+                        break
+                      }
+                    }
+                  }
+                }
+                
                 return `${totalAmount.toFixed(4)} ${tokenSymbol}`
               })(),
               icon: DollarSign,
@@ -761,16 +811,40 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
                         </TableCell>
                       </motion.tr>
                     ) : (
-                      auctions.map((auction, index) => {
+                      auctions
+                        .sort((a, b) => {
+                          // Sort by creation time, most recent first
+                          const aOrderData = orderDataMap.get(a.orderId)
+                          const bOrderData = orderDataMap.get(b.orderId)
+                          
+                          if (aOrderData?.createdAt && bOrderData?.createdAt) {
+                            return new Date(bOrderData.createdAt).getTime() - new Date(aOrderData.createdAt).getTime()
+                          }
+                          
+                          // Fallback: sort by orderId (newer orderIds typically come later)
+                          return b.orderId.localeCompare(a.orderId)
+                        })
+                        .map((auction, index) => {
                         const tokenInfo = getTokenInfo(auction)
                         const status = getAuctionStatus(auction)
                         const progress = getAuctionProgress(auction)
-                                                 const currentPrice = auction.auctionType === 'single' 
-                           ? (auction as SingleAuction).currentPrice || 0
-                           : (auction as SegmentedAuction).segments?.[0]?.currentPrice || 0
-                         const minPrice = auction.auctionType === 'single'
-                           ? (auction as SingleAuction).minimumPrice || 0
-                           : (auction as SegmentedAuction).minimumPrice || 0
+                        const currentPrice = auction.auctionType === 'single' 
+                          ? (auction as SingleAuction).currentPrice || 0
+                          : (auction as SegmentedAuction).segments?.[0]?.currentPrice || 0
+                        const minPrice = auction.auctionType === 'single'
+                          ? (auction as SingleAuction).minimumPrice || 0
+                          : (auction as SegmentedAuction).minimumPrice || 0
+
+                        // Debug: Log token info for each auction
+                        console.log(`📊 Auction ${auction.orderId} token info:`, {
+                          tokenName: tokenInfo.tokenName,
+                          tokenSymbol: tokenInfo.tokenSymbol,
+                          fromChain: tokenInfo.fromChain,
+                          toChain: tokenInfo.toChain,
+                          srcAmount: tokenInfo.srcAmount,
+                          dstAmount: tokenInfo.dstAmount,
+                          hasOrderData: !!orderDataMap.get(auction.orderId)
+                        })
 
                         return (
                           <motion.tr
@@ -918,9 +992,7 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
                   <div>
                     <div className="flex items-center gap-2">
                       <h2 className="text-lg font-bold text-white">{selectedAuction.tokenName}</h2>
-                      <Badge className="bg-blue-500/20 text-blue-300 border-blue-500/30 backdrop-blur-sm text-xs">
-                        FUSION SWAP
-                      </Badge>
+
                     </div>
                     <div className="flex items-center gap-2 text-xs text-white/70 mt-1">
                       <span>{selectedAuction.fromChain}</span>

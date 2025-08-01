@@ -103,7 +103,10 @@ class DutchAuctionServer {
           // Create a clean object without circular references
           const cleanAuction = {
             orderId: auction.orderId,
+            orderType: auction.orderType,
             auctionType: auction.auctionType,
+            hashedSecret: auction.hashedSecret, // Include hashedSecret for resolver
+            buyerAddress: auction.buyerAddress, // Include buyerAddress for resolver
             currentPrice: auction.currentPrice || auction.segments?.[0]?.currentPrice,
             startPrice: auction.startPrice || auction.segments?.[0]?.startPrice,
             endPrice: auction.endPrice || auction.minimumPrice,
@@ -448,6 +451,7 @@ class DutchAuctionServer {
       orderType: 'partialfill',
       auctionType: 'segmented',
       hashedSecret: orderData.hashedSecret || '', // Include hashedSecret for resolver
+      buyerAddress: orderData.buyerAddress || '', // Include buyerAddress for resolver
       segments: [
         {
           id: 1,
@@ -498,6 +502,9 @@ class DutchAuctionServer {
       intervals: [] // Array to store all segment intervals
     };
     
+    console.log('🔍 Segmented auction created with buyer address:', auction.buyerAddress)
+    console.log('🔍 Order data buyer address:', orderData.buyerAddress)
+    
     // Add to active auctions
     this.activeAuctions.set(orderId, auction);
     
@@ -517,12 +524,15 @@ class DutchAuctionServer {
     this.broadcastToAll({
       type: 'new_segmented_auction',
       orderId: orderId,
+      orderType: auction.orderType,
+      auctionType: auction.auctionType,
       segments: auction.segments,
       marketPrice: auction.marketPrice,
       sourceAmount: auction.sourceAmount,
       slippage: auction.slippage,
       minimumPrice: auction.minimumPrice,
-      hashedSecret: auction.hashedSecret // Include hashedSecret for resolver
+      hashedSecret: auction.hashedSecret, // Include hashedSecret for resolver
+      buyerAddress: auction.buyerAddress // Include buyerAddress for resolver
     });
     
     // Start all segments in parallel
@@ -588,6 +598,7 @@ class DutchAuctionServer {
       orderType: 'normal',
       auctionType: 'single',
       hashedSecret: orderData.hashedSecret || '', // Include hashedSecret for resolver
+      buyerAddress: orderData.buyerAddress || '', // Include buyerAddress for resolver
       currentPrice: startPrice,
       startPrice: startPrice,
       endPrice: marketPrice,
@@ -600,6 +611,9 @@ class DutchAuctionServer {
       endTime: null, // No fixed end time, ends when price reaches minimum price or winner
       interval: null
     };
+    
+    console.log('🔍 Single auction created with buyer address:', auction.buyerAddress)
+    console.log('🔍 Order data buyer address:', orderData.buyerAddress)
     
     // Add to active auctions
     this.activeAuctions.set(orderId, auction);
@@ -617,13 +631,16 @@ class DutchAuctionServer {
     this.broadcastToAll({
       type: 'new_single_auction',
       orderId: orderId,
+      orderType: auction.orderType,
+      auctionType: auction.auctionType,
       currentPrice: startPrice,
       startPrice: startPrice,
       endPrice: minimumPrice,
       marketPrice: marketPrice,
       sourceAmount: sourceAmount,
       slippage: slippage,
-      hashedSecret: auction.hashedSecret // Include hashedSecret for resolver
+      hashedSecret: auction.hashedSecret, // Include hashedSecret for resolver
+      buyerAddress: auction.buyerAddress // Include buyerAddress for resolver
     });
     
     // Start single auction
@@ -661,6 +678,8 @@ class DutchAuctionServer {
         startPrice: auction.startPrice,
         endPrice: auction.minimumPrice,
         marketPrice: auction.marketPrice,
+        hashedSecret: auction.hashedSecret, // Include hashedSecret for resolver
+        buyerAddress: auction.buyerAddress, // Include buyerAddress for resolver
         timeRemaining: null // No fixed time
       });
       
@@ -712,6 +731,8 @@ class DutchAuctionServer {
         startPrice: segment.startPrice,
         endPrice: segment.endPrice,
         marketPrice: auction.marketPrice,
+        hashedSecret: auction.hashedSecret, // Include hashedSecret for resolver
+        buyerAddress: auction.buyerAddress, // Include buyerAddress for resolver
         timeRemaining: null // No fixed time
       });
       
@@ -1107,8 +1128,8 @@ app.post('/partialfill', async (req, res) => {
     console.log('✅ Partial fill order created successfully:', orderId);
 
     // Automatically start segmented Dutch auction for the new order
-    if (auctionServer) {
-      await auctionServer.startSegmentedAuction(orderId);
+    if (global.auctionServer) {
+      await global.auctionServer.startSegmentedAuction(orderId);
     }
 
     res.status(201).json({
@@ -1200,8 +1221,8 @@ app.post('/create', async (req, res) => {
     console.log('✅ Normal order created successfully:', orderId);
 
     // Automatically start single Dutch auction for the new order
-    if (auctionServer) {
-      await auctionServer.startSingleAuction(orderId);
+    if (global.auctionServer) {
+      await global.auctionServer.startSingleAuction(orderId);
     }
 
     res.status(201).json({
@@ -1479,25 +1500,26 @@ app.post('/orders/:orderId/segment-secrets', async (req, res) => {
   }
 });
 
-// POST /verify endpoint - Verify transactions using orderId and optional segmentId
-app.post('/verify', async (req, res) => {
+// POST /orders/:orderId/segment-secret endpoint - Update specific segment secret for partial fill orders
+app.post('/orders/:orderId/segment-secret', async (req, res) => {
   try {
-    const {
-      orderId,
-      segmentId
-    } = req.body;
+    const { orderId } = req.params;
+    const { segmentId, secret, hashedSecret } = req.body;
 
     // Validate required fields
-    if (!orderId) {
+    if (!segmentId || !secret || !hashedSecret) {
       return res.status(400).json({
         success: false,
-        error: 'Missing required field: orderId'
+        error: 'Missing required fields: segmentId, secret, and hashedSecret'
       });
     }
 
-    console.log(`🔍 Starting verification process for order: ${orderId}`);
-    if (segmentId) {
-      console.log(`📊 Segment ID: ${segmentId}`);
+    // Validate segmentId
+    if (segmentId < 1 || segmentId > 4) {
+      return res.status(400).json({
+        success: false,
+        error: 'segmentId must be between 1 and 4'
+      });
     }
 
     // Get order from DynamoDB
@@ -1515,330 +1537,80 @@ app.post('/verify', async (req, res) => {
     }
 
     const order = orderResult.Item;
-    console.log(`📊 Order Type: ${order.orderType}`);
-    console.log(`📊 Order Status: ${order.status}`);
-
-    // Validate segmentId for partial fill orders
-    if (order.orderType === 'partialfill') {
-      if (!segmentId) {
-        return res.status(400).json({
-          success: false,
-          error: 'segmentId is required for partial fill orders'
-        });
-      }
-
-      if (segmentId < 1 || segmentId > 4) {
-        return res.status(400).json({
-          success: false,
-          error: 'segmentId must be between 1 and 4'
-        });
-      }
-
-      // Check if segment secrets exist
-      let segmentSecrets = [];
-      if (order.segmentSecrets) {
-        try {
-          segmentSecrets = JSON.parse(order.segmentSecrets);
-        } catch (e) {
-          console.log('Could not parse segmentSecrets for order:', orderId);
-        }
-      }
-
-      if (segmentSecrets.length === 0) {
-        return res.status(400).json({
-          success: false,
-          error: 'Segment secrets not found for this order. Maker needs to update segment secrets first.'
-        });
-      }
-
-      const segmentSecret = segmentSecrets.find(s => s.segmentId === segmentId);
-      if (!segmentSecret) {
-        return res.status(400).json({
-          success: false,
-          error: `Secret for segment ${segmentId} not found`
-        });
-      }
-
-      console.log(`🔐 Found secret for segment ${segmentId}`);
-      console.log(`📊 Hashed Secret: ${segmentSecret.hashedSecret}`);
-    } else if (order.orderType === 'normal') {
-      if (segmentId) {
-        return res.status(400).json({
-          success: false,
-          error: 'segmentId should not be provided for normal orders'
-        });
-      }
-      console.log(`📊 Normal order - no segment secrets needed`);
-    }
-
-    // Import required modules
-    const axios = require('axios');
-    const { ethers } = require('ethers');
-
-    // Configuration
-    const ALCHEMY_URL = "https://eth-sepolia.g.alchemy.com/v2/NMsHzNgJ7XUYtzNyFpEJ8yT4muQ_lkRF";
-    const targetAmount = 0.001; // From ethchecker.js
-    const contractAddress = 'CBDMXSMH25IQJPI4YSAKMVITGXFVFH2O23SSAPS5L73F2WIGSDHQA6OY';
-    const stellarTestnetHorizon = 'https://horizon-testnet.stellar.org';
-
-    let ethResult = false;
-    let xlmResult = false;
-
-    // === ETHEREUM CHECK (from ethchecker.js) ===
-    console.log(`\n🔗 Checking Ethereum transactions...`);
-    try {
-      // Use buyer address from order as target address
-      const targetAddress = order.buyerAddress;
-      const escrowAddress = "0x821E049c0d103230BE6203f5ad9E9c2F7948A95B"; // Default escrow address
-      
-      console.log(`📊 Using escrow address: ${escrowAddress.toLowerCase()}`);
-      console.log(`📊 Looking for transactions from: ${targetAddress.toLowerCase()}`);
-      console.log(`📊 Target amount: ${targetAmount} ETH`);
-      
-      const response = await axios.post(ALCHEMY_URL, {
-        jsonrpc: "2.0",
-        id: 1,
-        method: "alchemy_getAssetTransfers",
-        params: [{
-          fromBlock: "0x0",
-          toBlock: "latest",
-          toAddress: escrowAddress.toLowerCase(),
-          category: ["internal"], // Only internal txs
-          withMetadata: true,
-          excludeZeroValue: false,
-          maxCount: "0x3e8"
-        }]
-      });
-
-      console.log(`📊 Alchemy response status: ${response.status}`);
-      
-      if (response.data.error) {
-        console.error(`❌ Alchemy API error:`, response.data.error);
-        throw new Error(`Alchemy API error: ${JSON.stringify(response.data.error)}`);
-      }
-
-      const transfers = response.data.result.transfers;
-      console.log(`📊 Total Internal Transactions to Escrow: ${transfers.length}`);
-
-      // Log first few transactions for debugging
-      if (transfers.length > 0) {
-        console.log(`📊 Sample transactions:`);
-        transfers.slice(0, 3).forEach((tx, i) => {
-          console.log(`  ${i + 1}. From: ${tx.from}, To: ${tx.to}, Value: ${tx.value}, Hash: ${tx.hash}`);
-        });
-      }
-
-      const matched = transfers.filter(tx => {
-        const from = tx.from?.toLowerCase();
-        const value = parseFloat(tx.value || 0);
-        const matches = from === targetAddress.toLowerCase() && value === targetAmount;
-        if (matches) {
-          console.log(`  Found matching transaction: ${tx.hash} from ${from} with value ${value}`);
-        }
-        return matches;
-      });
-
-      if (matched.length > 0) {
-        console.log(`✅ ETH Match found! ${matched.length} transaction(s) from ${targetAddress} with value ${targetAmount} ETH`);
-        matched.forEach((tx, i) => {
-          console.log(`  ${i + 1}. Hash: ${tx.hash}`);
-        });
-        ethResult = true;
-      } else {
-        console.log(`❌ No matching ETH transactions found for address ${targetAddress} with value ${targetAmount} ETH`);
-      }
-    } catch (error) {
-      console.error("❌ Error checking Ethereum transactions:", error.response?.data || error.message);
-      if (error.response?.data) {
-        console.error("❌ Full error response:", JSON.stringify(error.response.data, null, 2));
-      }
-      
-      // If it's an Alchemy API error, try with a different approach
-      if (error.response?.data?.error?.code === 1002 || error.message.includes('Internal server error')) {
-        console.log(`🔄 Trying alternative approach due to Alchemy API error...`);
-        try {
-          // Try with a simpler request
-          const altResponse = await axios.post(ALCHEMY_URL, {
-            jsonrpc: "2.0",
-            id: 1,
-            method: "alchemy_getAssetTransfers",
-            params: [{
-              fromBlock: "0x0",
-              toBlock: "latest",
-              toAddress: escrowAddress.toLowerCase(),
-              category: ["internal"],
-              withMetadata: false,
-              excludeZeroValue: false,
-              maxCount: "0x64" // Reduced count
-            }]
-          });
-          
-          if (altResponse.data.error) {
-            console.error(`❌ Alternative approach also failed:`, altResponse.data.error);
-          } else {
-            const altTransfers = altResponse.data.result.transfers;
-            console.log(`📊 Alternative approach found ${altTransfers.length} transactions`);
-            
-            const altMatched = altTransfers.filter(tx => {
-              const from = tx.from?.toLowerCase();
-              const value = parseFloat(tx.value || 0);
-              return from === targetAddress.toLowerCase() && value === targetAmount;
-            });
-            
-            if (altMatched.length > 0) {
-              console.log(`✅ ETH Match found via alternative approach!`);
-              ethResult = true;
-            }
-          }
-        } catch (altError) {
-          console.error("❌ Alternative approach also failed:", altError.message);
-        }
-      }
-    }
-
-    // === STELLAR CHECK (from xlmchecker.js) ===
-    console.log(`\n⭐ Checking Stellar transactions...`);
-    try {
-      // Use a default XLM address for testing
-      const xlmaddress = "GA2HENU4XKUUKYJRL6B3PNX7CB2WYO3F5JXLQZNBQV2VLZ27KB63L3PV";
-      
-      // Test connection first
-      const horizonResponse = await fetch(stellarTestnetHorizon);
-      if (!horizonResponse.ok) {
-        console.log('❌ Cannot connect to Stellar Horizon');
-        xlmResult = false;
-      } else {
-        console.log('✅ Connected to Stellar Horizon');
-
-        // Check if XLM address exists
-        const accountResponse = await fetch(`${stellarTestnetHorizon}/accounts/${xlmaddress}`);
-        if (!accountResponse.ok) {
-          console.log(`❌ XLM address ${xlmaddress} not found`);
-          xlmResult = false;
-        } else {
-          console.log(`✅ XLM address ${xlmaddress} exists`);
-
-          // Get recent transactions
-          const txResponse = await fetch(`${stellarTestnetHorizon}/accounts/${xlmaddress}/transactions?order=desc&limit=10`);
-          if (txResponse.ok) {
-            const txData = await txResponse.json();
-            const transactions = txData._embedded ? txData._embedded.records : [];
-            console.log(`📊 Found ${transactions.length} recent XLM transactions`);
-
-            // Check each transaction for time and effect criteria
-            for (let i = 0; i < transactions.length; i++) {
-              const tx = transactions[i];
-              
-              // Check if transaction is within 5 minutes
-              const currentTime = new Date();
-              const txTime = new Date(tx.created_at);
-              const timeDiffMs = currentTime.getTime() - txTime.getTime();
-              const timeDiffMinutes = timeDiffMs / (1000 * 60);
-              
-              console.log(`  Checking transaction ${i + 1}: ${tx.hash} (${timeDiffMinutes.toFixed(2)} minutes ago)`);
-              
-              if (timeDiffMinutes <= 5) {
-                // Check effects for account_debited
-                const effectsResponse = await fetch(`${stellarTestnetHorizon}/transactions/${tx.hash}/effects`);
-                if (effectsResponse.ok) {
-                  const effectsData = await effectsResponse.json();
-                  const effects = effectsData._embedded ? effectsData._embedded.records : [];
-                  
-                  if (effects.length > 0 && effects[0].type === 'account_debited') {
-                    console.log(`✅ XLM Match found! Transaction ${tx.hash} has Effect 1 = "account_debited" and is within 5 minutes`);
-                    xlmResult = true;
-                    break;
-                  }
-                }
-              } else {
-                console.log(`  Transaction is older than 5 minutes, skipping...`);
-              }
-            }
-            
-            if (!xlmResult) {
-              console.log(`❌ No matching XLM transactions found with Effect 1 = "account_debited" within 5 minutes`);
-            }
-          } else {
-            console.log(`❌ Error fetching XLM transactions`);
-          }
-        }
-      }
-    } catch (error) {
-      console.error("❌ Error checking Stellar transactions:", error.message);
-    }
-
-    // === FINAL RESULT ===
-    console.log(`\n📋 VERIFICATION RESULTS:`);
-    console.log(`🔗 Ethereum: ${ethResult ? '✅ PASS' : '❌ FAIL'}`);
-    console.log(`⭐ Stellar: ${xlmResult ? '✅ PASS' : '❌ FAIL'}`);
-
-    const overallResult = ethResult || xlmResult;
-    console.log(`🎯 Overall Result: ${overallResult ? '✅ TRUE' : '❌ FALSE'}`);
-
-    if (overallResult) {
-      res.json({
-        success: true,
-        message: 'Verification successful - At least one test case passed',
-        data: {
-          orderId: orderId,
-          segmentId: segmentId || null,
-          orderType: order.orderType,
-          ethResult: ethResult,
-          xlmResult: xlmResult,
-          overallResult: true,
-          details: {
-            ethereum: {
-              checked: true,
-              passed: ethResult,
-              escrowAddress: "0x821E049c0d103230BE6203f5ad9E9c2F7948A95B",
-              targetAddress: order.buyerAddress,
-              targetAmount: targetAmount
-            },
-            stellar: {
-              checked: true,
-              passed: xlmResult,
-              xlmAddress: "GA2HENU4XKUUKYJRL6B3PNX7CB2WYO3F5JXLQZNBQV2VLZ27KB63L3PV",
-              contractAddress: contractAddress,
-              timeFilter: '5 minutes',
-              effectFilter: 'account_debited'
-            }
-          }
-        }
-      });
-    } else {
-      res.status(400).json({
+    
+    // Verify this is a partial fill order
+    if (order.orderType !== 'partialfill') {
+      return res.status(400).json({
         success: false,
-        error: 'Verification failed - No test cases passed',
-        data: {
-          orderId: orderId,
-          segmentId: segmentId || null,
-          orderType: order.orderType,
-          ethResult: ethResult,
-          xlmResult: xlmResult,
-          overallResult: false,
-          details: {
-            ethereum: {
-              checked: true,
-              passed: ethResult,
-              escrowAddress: "0x821E049c0d103230BE6203f5ad9E9c2F7948A95B",
-              targetAddress: order.buyerAddress,
-              targetAmount: targetAmount
-            },
-            stellar: {
-              checked: true,
-              passed: xlmResult,
-              xlmAddress: "GA2HENU4XKUUKYJRL6B3PNX7CB2WYO3F5JXLQZNBQV2VLZ27KB63L3PV",
-              contractAddress: contractAddress,
-              timeFilter: '5 minutes',
-              effectFilter: 'account_debited'
-            }
-          }
-        }
+        error: 'Can only update segment secrets for partial fill orders'
       });
     }
+
+    // Get existing segment secrets or create new array
+    let segmentSecrets = [];
+    if (order.segmentSecrets) {
+      try {
+        segmentSecrets = JSON.parse(order.segmentSecrets);
+      } catch (e) {
+        console.log('Could not parse existing segmentSecrets, starting fresh');
+        segmentSecrets = [];
+      }
+    }
+
+    // Update or add the specific segment secret
+    const existingIndex = segmentSecrets.findIndex(s => s.segmentId === segmentId);
+    const segmentSecret = {
+      segmentId: segmentId,
+      secret: secret,
+      hashedSecret: hashedSecret
+    };
+
+    if (existingIndex >= 0) {
+      // Update existing segment
+      segmentSecrets[existingIndex] = segmentSecret;
+      console.log(`🔄 Updated existing segment ${segmentId} secret`);
+    } else {
+      // Add new segment
+      segmentSecrets.push(segmentSecret);
+      console.log(`➕ Added new segment ${segmentId} secret`);
+    }
+
+    // Update the order with the updated segment secrets
+    const updateParams = {
+      TableName: TABLE_NAME,
+      Key: { orderId: orderId },
+      UpdateExpression: 'SET #segmentSecrets = :segmentSecrets, #updatedAt = :updatedAt',
+      ExpressionAttributeNames: {
+        '#segmentSecrets': 'segmentSecrets',
+        '#updatedAt': 'updatedAt'
+      },
+      ExpressionAttributeValues: {
+        ':segmentSecrets': JSON.stringify(segmentSecrets),
+        ':updatedAt': new Date().toISOString()
+      }
+    };
+
+    await dynamodb.update(updateParams).promise();
+
+    console.log(`✅ Updated segment ${segmentId} secret for order ${orderId}`);
+    console.log(`🔐 Secret: ${secret.slice(0, 10)}...`);
+    console.log(`🔐 Hashed Secret: ${hashedSecret.slice(0, 10)}...`);
+    console.log(`📊 Total segment secrets: ${segmentSecrets.length}`);
+
+    res.json({
+      success: true,
+      message: `Segment ${segmentId} secret updated successfully`,
+      data: {
+        orderId: orderId,
+        segmentId: segmentId,
+        secret: secret.slice(0, 10) + '...',
+        hashedSecret: hashedSecret.slice(0, 10) + '...',
+        totalSegments: segmentSecrets.length
+      }
+    });
 
   } catch (error) {
-    console.error('❌ Error in verification process:', error);
+    console.error('❌ Error updating segment secret:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error',
@@ -1846,6 +1618,89 @@ app.post('/verify', async (req, res) => {
     });
   }
 });
+
+// POST /orders/:orderId/secret endpoint - Update main secret for single fill orders
+app.post('/orders/:orderId/secret', async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const { secret, hashedSecret } = req.body;
+
+    // Validate required fields
+    if (!secret || !hashedSecret) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields: secret and hashedSecret'
+      });
+    }
+
+    // Get order from DynamoDB
+    const getParams = {
+      TableName: TABLE_NAME,
+      Key: { orderId: orderId }
+    };
+
+    const orderResult = await dynamodb.get(getParams).promise();
+    if (!orderResult.Item) {
+      return res.status(404).json({
+        success: false,
+        error: 'Order not found'
+      });
+    }
+
+    const order = orderResult.Item;
+    
+    // Verify this is a single fill order
+    if (order.orderType === 'partialfill') {
+        return res.status(400).json({
+          success: false,
+        error: 'Cannot update main secret for partial fill orders. Use segment-secret endpoint instead.'
+      });
+    }
+
+    // Update the order with the main secret
+    const updateParams = {
+      TableName: TABLE_NAME,
+      Key: { orderId: orderId },
+      UpdateExpression: 'SET #secret = :secret, #hashedSecret = :hashedSecret, #updatedAt = :updatedAt',
+      ExpressionAttributeNames: {
+        '#secret': 'secret',
+        '#hashedSecret': 'hashedSecret',
+        '#updatedAt': 'updatedAt'
+      },
+      ExpressionAttributeValues: {
+        ':secret': secret,
+        ':hashedSecret': hashedSecret,
+        ':updatedAt': new Date().toISOString()
+      }
+    };
+
+    await dynamodb.update(updateParams).promise();
+
+    console.log(`✅ Updated main secret for order ${orderId}`);
+    console.log(`🔐 Secret: ${secret.slice(0, 10)}...`);
+    console.log(`🔐 Hashed Secret: ${hashedSecret.slice(0, 10)}...`);
+
+    res.json({
+      success: true,
+      message: 'Main secret updated successfully',
+      data: {
+        orderId: orderId,
+        secret: secret.slice(0, 10) + '...',
+        hashedSecret: hashedSecret.slice(0, 10) + '...'
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error updating main secret:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error',
+      message: error.message
+    });
+  }
+});
+
+
 
 // Endpoint to get hashedSecret by order ID
 app.post('/get-hashed-secret', async (req, res) => {
@@ -1859,8 +1714,8 @@ app.post('/get-hashed-secret', async (req, res) => {
     
     if (!orderId) {
       console.error('❌ Order ID is required');
-      return res.status(400).json({ 
-        success: false, 
+        return res.status(400).json({
+          success: false,
         error: 'Order ID is required' 
       });
     }
@@ -1925,7 +1780,7 @@ async function startServer() {
     await createTableIfNotExists();
     
     // Start Dutch Auction WebSocket server
-    auctionServer = new DutchAuctionServer();
+    global.auctionServer = new DutchAuctionServer();
     
     // Start Express server
     app.listen(PORT, () => {
@@ -1967,3 +1822,803 @@ process.on('SIGTERM', () => {
 });
 
 startServer(); 
+
+// POST /resolver/progress endpoint - Update resolver progress for an order
+app.post('/resolver/progress', async (req, res) => {
+  try {
+    const { orderId, step, details, segmentId } = req.body;
+
+    // Validate required fields
+    if (!orderId || !step) {
+        return res.status(400).json({
+          success: false,
+        error: 'Missing required fields: orderId and step'
+      });
+    }
+
+    // Get order from DynamoDB
+    const getParams = {
+      TableName: TABLE_NAME,
+      Key: { orderId: orderId }
+    };
+
+    const orderResult = await dynamodb.get(getParams).promise();
+    if (!orderResult.Item) {
+      return res.status(404).json({
+        success: false,
+        error: 'Order not found'
+      });
+    }
+
+    const order = orderResult.Item;
+    
+    // Update order with resolver progress
+    const updateParams = {
+      TableName: TABLE_NAME,
+      Key: { orderId: orderId },
+      UpdateExpression: 'SET #resolverProgress = :resolverProgress, #updatedAt = :updatedAt',
+      ExpressionAttributeNames: {
+        '#resolverProgress': 'resolverProgress',
+        '#updatedAt': 'updatedAt'
+      },
+      ExpressionAttributeValues: {
+        ':resolverProgress': JSON.stringify({
+          step: step,
+          details: details || {},
+          timestamp: new Date().toISOString(),
+          segmentId: segmentId
+        }),
+        ':updatedAt': new Date().toISOString()
+      }
+    };
+
+    await dynamodb.update(updateParams).promise();
+
+    console.log(`✅ Resolver progress updated for order ${orderId}: ${step}`);
+    if (segmentId) {
+      console.log(`📊 Segment ${segmentId} progress: ${step}`);
+    }
+
+    // Emit WebSocket event for this specific order
+    if (global.auctionServer) {
+      const eventData = {
+        type: 'resolver_progress',
+        orderId: orderId,
+        step: step,
+        details: details || {},
+        segmentId: segmentId,
+        timestamp: new Date().toISOString()
+      };
+      
+      global.auctionServer.broadcastToAll(eventData);
+      console.log(`📡 Emitted resolver_progress event for order ${orderId}`);
+    }
+
+    res.json({
+      success: true,
+      message: 'Resolver progress updated successfully',
+      data: {
+        orderId: orderId,
+        step: step,
+        segmentId: segmentId,
+        timestamp: new Date().toISOString()
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error updating resolver progress:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error',
+      message: error.message
+    });
+  }
+});
+
+// POST /resolver/escrow-created endpoint - Notify escrow creation
+app.post('/resolver/escrow-created', async (req, res) => {
+  try {
+    const { orderId, escrowType, escrowAddress, transactionHash, segmentId } = req.body;
+
+    // Validate required fields
+    if (!orderId || !escrowType || !escrowAddress) {
+        return res.status(400).json({
+          success: false,
+        error: 'Missing required fields: orderId, escrowType, and escrowAddress'
+      });
+    }
+
+    // Get order from DynamoDB
+    const getParams = {
+      TableName: TABLE_NAME,
+      Key: { orderId: orderId }
+    };
+
+    const orderResult = await dynamodb.get(getParams).promise();
+    if (!orderResult.Item) {
+      return res.status(404).json({
+        success: false,
+        error: 'Order not found'
+      });
+    }
+
+    const order = orderResult.Item;
+    
+    // Update order with escrow information
+    const escrowKey = segmentId ? `${escrowType}_escrow_segment_${segmentId}` : `${escrowType}_escrow`;
+    const updateParams = {
+      TableName: TABLE_NAME,
+      Key: { orderId: orderId },
+      UpdateExpression: `SET #${escrowKey} = :escrowData, #updatedAt = :updatedAt`,
+      ExpressionAttributeNames: {
+        [`#${escrowKey}`]: escrowKey,
+        '#updatedAt': 'updatedAt'
+      },
+      ExpressionAttributeValues: {
+        [`:escrowData`]: JSON.stringify({
+          address: escrowAddress,
+          transactionHash: transactionHash,
+          timestamp: new Date().toISOString(),
+          segmentId: segmentId
+        }),
+        ':updatedAt': new Date().toISOString()
+      }
+    };
+
+    await dynamodb.update(updateParams).promise();
+
+    console.log(`✅ ${escrowType} escrow created for order ${orderId}: ${escrowAddress}`);
+      if (segmentId) {
+      console.log(`📊 Segment ${segmentId} ${escrowType} escrow: ${escrowAddress}`);
+    }
+
+    // Emit WebSocket event for this specific order
+    if (global.auctionServer) {
+      const eventData = {
+        type: `${escrowType}_escrow_created`,
+        orderId: orderId,
+        escrowAddress: escrowAddress,
+        transactionHash: transactionHash,
+        segmentId: segmentId,
+        timestamp: new Date().toISOString()
+      };
+      
+      global.auctionServer.broadcastToAll(eventData);
+      console.log(`📡 Emitted ${escrowType}_escrow_created event for order ${orderId}`);
+    }
+
+    res.json({
+      success: true,
+      message: `${escrowType} escrow created successfully`,
+      data: {
+        orderId: orderId,
+        escrowType: escrowType,
+        escrowAddress: escrowAddress,
+        transactionHash: transactionHash,
+        segmentId: segmentId,
+        timestamp: new Date().toISOString()
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error notifying escrow creation:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error',
+      message: error.message
+    });
+  }
+});
+
+// POST /resolver/withdrawal-completed endpoint - Notify withdrawal completion
+app.post('/resolver/withdrawal-completed', async (req, res) => {
+  try {
+    const { orderId, withdrawalType, transactionHash, segmentId } = req.body;
+
+    // Validate required fields
+    if (!orderId || !withdrawalType || !transactionHash) {
+        return res.status(400).json({
+          success: false,
+        error: 'Missing required fields: orderId, withdrawalType, and transactionHash'
+      });
+    }
+
+    // Get order from DynamoDB
+    const getParams = {
+      TableName: TABLE_NAME,
+      Key: { orderId: orderId }
+    };
+
+    const orderResult = await dynamodb.get(getParams).promise();
+    if (!orderResult.Item) {
+      return res.status(404).json({
+        success: false,
+        error: 'Order not found'
+      });
+    }
+
+    const order = orderResult.Item;
+    
+    // Update order with withdrawal information
+    const withdrawalKey = segmentId ? `${withdrawalType}_withdrawal_segment_${segmentId}` : `${withdrawalType}_withdrawal`;
+    const updateParams = {
+      TableName: TABLE_NAME,
+      Key: { orderId: orderId },
+      UpdateExpression: `SET #${withdrawalKey} = :withdrawalData, #updatedAt = :updatedAt`,
+      ExpressionAttributeNames: {
+        [`#${withdrawalKey}`]: withdrawalKey,
+        '#updatedAt': 'updatedAt'
+      },
+      ExpressionAttributeValues: {
+        [`:withdrawalData`]: JSON.stringify({
+          transactionHash: transactionHash,
+          timestamp: new Date().toISOString(),
+          segmentId: segmentId
+        }),
+        ':updatedAt': new Date().toISOString()
+      }
+    };
+
+    await dynamodb.update(updateParams).promise();
+
+    console.log(`✅ ${withdrawalType} withdrawal completed for order ${orderId}: ${transactionHash}`);
+    if (segmentId) {
+      console.log(`📊 Segment ${segmentId} ${withdrawalType} withdrawal: ${transactionHash}`);
+    }
+
+    // Emit WebSocket event for this specific order
+    if (global.auctionServer) {
+      const eventData = {
+        type: `${withdrawalType}_withdrawal_completed`,
+        orderId: orderId,
+        transactionHash: transactionHash,
+        segmentId: segmentId,
+        timestamp: new Date().toISOString()
+      };
+      
+      global.auctionServer.broadcastToAll(eventData);
+      console.log(`📡 Emitted ${withdrawalType}_withdrawal_completed event for order ${orderId}`);
+    }
+
+    res.json({
+      success: true,
+      message: `${withdrawalType} withdrawal completed successfully`,
+      data: {
+        orderId: orderId,
+        withdrawalType: withdrawalType,
+        transactionHash: transactionHash,
+        segmentId: segmentId,
+        timestamp: new Date().toISOString()
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error notifying withdrawal completion:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error',
+      message: error.message
+    });
+  }
+});
+
+// POST /resolver/order-completed endpoint - Notify order completion
+app.post('/resolver/order-completed', async (req, res) => {
+  try {
+    const { orderId, segmentId } = req.body;
+
+    // Validate required fields
+    if (!orderId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required field: orderId'
+      });
+    }
+
+    // Get order from DynamoDB
+    const getParams = {
+      TableName: TABLE_NAME,
+      Key: { orderId: orderId }
+    };
+
+    const orderResult = await dynamodb.get(getParams).promise();
+    if (!orderResult.Item) {
+      return res.status(404).json({
+        success: false,
+        error: 'Order not found'
+      });
+    }
+
+    const order = orderResult.Item;
+    
+    // Update order status
+    const updateParams = {
+      TableName: TABLE_NAME,
+      Key: { orderId: orderId },
+      UpdateExpression: 'SET #status = :status, #updatedAt = :updatedAt',
+      ExpressionAttributeNames: {
+        '#status': 'status',
+        '#updatedAt': 'updatedAt'
+      },
+      ExpressionAttributeValues: {
+        ':status': segmentId ? 'segment_completed' : 'completed',
+        ':updatedAt': new Date().toISOString()
+      }
+    };
+
+    await dynamodb.update(updateParams).promise();
+
+    console.log(`✅ Order ${orderId} ${segmentId ? `segment ${segmentId}` : ''} completed`);
+    if (segmentId) {
+      console.log(`📊 Segment ${segmentId} completed for order ${orderId}`);
+    }
+
+    // Emit WebSocket event for this specific order
+    if (global.auctionServer) {
+      const eventData = {
+        type: segmentId ? 'segment_completed' : 'order_completed',
+        orderId: orderId,
+        segmentId: segmentId,
+        timestamp: new Date().toISOString()
+      };
+      
+      global.auctionServer.broadcastToAll(eventData);
+      console.log(`📡 Emitted ${segmentId ? 'segment_completed' : 'order_completed'} event for order ${orderId}`);
+    }
+
+    res.json({
+      success: true,
+      message: segmentId ? `Segment ${segmentId} completed successfully` : 'Order completed successfully',
+      data: {
+        orderId: orderId,
+        segmentId: segmentId,
+        timestamp: new Date().toISOString()
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error notifying order completion:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error',
+      message: error.message
+    });
+  }
+}); 
+
+// POST /resolver/request-secret endpoint - Request secret from buyer with verification
+app.post('/resolver/request-secret', async (req, res) => {
+  try {
+    const { orderId, segmentId } = req.body;
+
+    // Validate required fields
+    if (!orderId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required field: orderId'
+      });
+    }
+
+    console.log(`🔍 Starting verification process for order: ${orderId}`);
+    if (segmentId) {
+      console.log(`📊 Segment ID: ${segmentId}`);
+    }
+
+    // Get order from DynamoDB
+    const getParams = {
+      TableName: TABLE_NAME,
+      Key: { orderId: orderId }
+    };
+
+    const orderResult = await dynamodb.get(getParams).promise();
+    if (!orderResult.Item) {
+      return res.status(404).json({
+        success: false,
+        error: 'Order not found'
+      });
+    }
+
+    const order = orderResult.Item;
+    console.log(`📊 Order Type: ${order.orderType}`);
+    console.log(`📊 Order Status: ${order.status}`);
+
+    // Validate segmentId for partial fill orders
+    if (order.orderType === 'partialfill') {
+      if (!segmentId) {
+        return res.status(400).json({
+          success: false,
+          error: 'segmentId is required for partial fill orders'
+        });
+      }
+
+      if (segmentId < 1 || segmentId > 4) {
+        return res.status(400).json({
+          success: false,
+          error: 'segmentId must be between 1 and 4'
+        });
+      }
+    }
+
+    // Import required modules for verification
+    const axios = require('axios');
+    const { ethers } = require('ethers');
+
+    // Configuration
+    const ALCHEMY_URL = "https://eth-sepolia.g.alchemy.com/v2/NMsHzNgJ7XUYtzNyFpEJ8yT4muQ_lkRF";
+    const stellarTestnetHorizon = 'https://horizon-testnet.stellar.org';
+    
+    // Get deployed escrow addresses from order data or use defaults
+    const sourceEscrowAddress = order.sourceEscrowAddress || "0x821E049c0d103230BE6203f5ad9E9c2F7948A95B";
+    const destinationEscrowAddress = order.destinationEscrowAddress || "0x821E049c0d103230BE6203f5ad9E9c2F7948A95B";
+    
+    console.log(`🔗 Source Escrow Address: ${sourceEscrowAddress}`);
+    console.log(`🔗 Destination Escrow Address: ${destinationEscrowAddress}`);
+
+    let ethResult = false;
+    let xlmResult = false;
+
+    // === ETHEREUM VERIFICATION ===
+    console.log(`\n🔗 Checking Ethereum escrow transactions...`);
+    try {
+      const targetAmount = parseFloat(order.srcAmount) || 0.001;
+      
+      console.log(`📊 Using source escrow address: ${sourceEscrowAddress.toLowerCase()}`);
+      console.log(`📊 Looking for transactions to: ${sourceEscrowAddress.toLowerCase()}`);
+      console.log(`📊 Target amount: ${targetAmount} ETH`);
+      
+      const response = await axios.post(ALCHEMY_URL, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "alchemy_getAssetTransfers",
+        params: [{
+          fromBlock: "0x0",
+          toBlock: "latest",
+          toAddress: sourceEscrowAddress.toLowerCase(),
+          category: ["internal"], // Only internal txs
+          withMetadata: true,
+          excludeZeroValue: false,
+          maxCount: "0x3e8"
+        }]
+      });
+
+      console.log(`📊 Alchemy response status: ${response.status}`);
+      
+      if (response.data.error) {
+        console.error(`❌ Alchemy API error:`, response.data.error);
+        throw new Error(`Alchemy API error: ${JSON.stringify(response.data.error)}`);
+      }
+
+      const transfers = response.data.result.transfers;
+      console.log(`📊 Total Internal Transactions to Source Escrow: ${transfers.length}`);
+
+      // Log first few transactions for debugging
+      if (transfers.length > 0) {
+        console.log(`📊 Sample transactions:`);
+        transfers.slice(0, 3).forEach((tx, i) => {
+          console.log(`  ${i + 1}. From: ${tx.from}, To: ${tx.to}, Value: ${tx.value}, Hash: ${tx.hash}`);
+        });
+      }
+
+      // Check for transactions with sufficient amount
+      const matched = transfers.filter(tx => {
+        const value = parseFloat(tx.value || 0);
+        const matches = value >= targetAmount;
+        if (matches) {
+          console.log(`  Found matching transaction: ${tx.hash} with value ${value} ETH`);
+        }
+        return matches;
+      });
+
+      if (matched.length > 0) {
+        console.log(`✅ ETH Escrow verified! ${matched.length} transaction(s) with sufficient amount (≥${targetAmount} ETH)`);
+        matched.forEach((tx, i) => {
+          console.log(`  ${i + 1}. Hash: ${tx.hash}, Value: ${tx.value} ETH`);
+        });
+        ethResult = true;
+      } else {
+        console.log(`❌ No matching ETH escrow transactions found with sufficient amount (≥${targetAmount} ETH)`);
+      }
+    } catch (error) {
+      console.error("❌ Error checking Ethereum escrow transactions:", error.response?.data || error.message);
+      if (error.response?.data) {
+        console.error("❌ Full error response:", JSON.stringify(error.response.data, null, 2));
+      }
+      
+      // Try alternative approach for Alchemy API errors
+      if (error.response?.data?.error?.code === 1002 || error.message.includes('Internal server error')) {
+        console.log(`🔄 Trying alternative approach due to Alchemy API error...`);
+        try {
+          const altResponse = await axios.post(ALCHEMY_URL, {
+            jsonrpc: "2.0",
+            id: 1,
+            method: "alchemy_getAssetTransfers",
+            params: [{
+              fromBlock: "0x0",
+              toBlock: "latest",
+              toAddress: sourceEscrowAddress.toLowerCase(),
+              category: ["internal"],
+              withMetadata: false,
+              excludeZeroValue: false,
+              maxCount: "0x64"
+            }]
+          });
+          
+          if (altResponse.data.error) {
+            console.error(`❌ Alternative approach also failed:`, altResponse.data.error);
+          } else {
+            const altTransfers = altResponse.data.result.transfers;
+            console.log(`📊 Alternative approach found ${altTransfers.length} transactions`);
+            
+            const targetAmount = parseFloat(order.srcAmount) || 0.001;
+            const altMatched = altTransfers.filter(tx => {
+              const value = parseFloat(tx.value || 0);
+              return value >= targetAmount;
+            });
+            
+            if (altMatched.length > 0) {
+              console.log(`✅ ETH Escrow verified via alternative approach!`);
+              ethResult = true;
+            }
+          }
+        } catch (altError) {
+          console.error("❌ Alternative approach also failed:", altError.message);
+        }
+      }
+    }
+
+    // === STELLAR VERIFICATION ===
+    console.log(`\n⭐ Checking Stellar escrow transactions...`);
+    try {
+      // Test connection first
+      const horizonResponse = await fetch(stellarTestnetHorizon);
+      if (!horizonResponse.ok) {
+        console.log('❌ Cannot connect to Stellar Horizon');
+        xlmResult = false;
+      } else {
+        console.log('✅ Connected to Stellar Horizon');
+
+        // Check if destination escrow address exists
+        const accountResponse = await fetch(`${stellarTestnetHorizon}/accounts/${destinationEscrowAddress}`);
+        if (!accountResponse.ok) {
+          console.log(`❌ Stellar escrow address ${destinationEscrowAddress} not found`);
+          xlmResult = false;
+        } else {
+          console.log(`✅ Stellar escrow address ${destinationEscrowAddress} exists`);
+
+          // Get recent transactions for the escrow
+          const txResponse = await fetch(`${stellarTestnetHorizon}/accounts/${destinationEscrowAddress}/transactions?order=desc&limit=10`);
+          if (txResponse.ok) {
+            const txData = await txResponse.json();
+            const transactions = txData._embedded ? txData._embedded.records : [];
+            console.log(`📊 Found ${transactions.length} recent Stellar escrow transactions`);
+
+            // Check each transaction for recent activity
+            for (let i = 0; i < transactions.length; i++) {
+              const tx = transactions[i];
+              
+              // Check if transaction is within 10 minutes (more lenient for escrow creation)
+              const currentTime = new Date();
+              const txTime = new Date(tx.created_at);
+              const timeDiffMs = currentTime.getTime() - txTime.getTime();
+              const timeDiffMinutes = timeDiffMs / (1000 * 60);
+              
+              console.log(`  Checking transaction ${i + 1}: ${tx.hash} (${timeDiffMinutes.toFixed(2)} minutes ago)`);
+              
+              if (timeDiffMinutes <= 10) {
+                // Check effects for account_credited (escrow funded)
+                const effectsResponse = await fetch(`${stellarTestnetHorizon}/transactions/${tx.hash}/effects`);
+                if (effectsResponse.ok) {
+                  const effectsData = await effectsResponse.json();
+                  const effects = effectsData._embedded ? effectsData._embedded.records : [];
+                  
+                  if (effects.length > 0 && effects[0].type === 'account_credited') {
+                    console.log(`✅ Stellar Escrow verified! Transaction ${tx.hash} has Effect 1 = "account_credited" and is within 10 minutes`);
+                    xlmResult = true;
+                    break;
+                  }
+                }
+              } else {
+                console.log(`  Transaction is older than 10 minutes, skipping...`);
+              }
+            }
+            
+            if (!xlmResult) {
+              console.log(`❌ No matching Stellar escrow transactions found with Effect 1 = "account_credited" within 10 minutes`);
+            }
+          } else {
+            console.log(`❌ Error fetching Stellar escrow transactions`);
+          }
+        }
+      }
+    } catch (error) {
+      console.error("❌ Error checking Stellar escrow transactions:", error.message);
+    }
+
+    // === VERIFICATION RESULT ===
+    console.log(`\n📋 ESCROW VERIFICATION RESULTS:`);
+    console.log(`🔗 Ethereum Source Escrow: ${ethResult ? '✅ VERIFIED' : '❌ NOT VERIFIED'}`);
+    console.log(`⭐ Stellar Destination Escrow: ${xlmResult ? '✅ VERIFIED' : '❌ NOT VERIFIED'}`);
+
+    const overallResult = ethResult && xlmResult;
+    console.log(`🎯 Overall Result: ${overallResult ? '✅ BOTH ESCROWS VERIFIED' : '❌ ESCROWS NOT VERIFIED'}`);
+
+    if (!overallResult) {
+      return res.status(400).json({
+        success: false,
+        error: 'Escrow verification failed - Both escrows must be verified before requesting secret',
+        data: {
+          orderId: orderId,
+          segmentId: segmentId || null,
+          orderType: order.orderType,
+          ethResult: ethResult,
+          xlmResult: xlmResult,
+          overallResult: false,
+          details: {
+            ethereum: {
+              checked: true,
+              passed: ethResult,
+              escrowAddress: sourceEscrowAddress,
+              targetAmount: parseFloat(order.srcAmount) || 0.001
+            },
+            stellar: {
+              checked: true,
+              passed: xlmResult,
+              escrowAddress: destinationEscrowAddress,
+              timeFilter: '10 minutes',
+              effectFilter: 'account_credited'
+            }
+          }
+        }
+      });
+    }
+
+    // If verification passes, proceed with secret request
+    console.log(`🔑 Both escrows verified! Proceeding with secret request...`);
+
+    // Update order status to indicate secret is requested
+    const updateParams = {
+      TableName: TABLE_NAME,
+      Key: { orderId: orderId },
+      UpdateExpression: 'SET #status = :status, #updatedAt = :updatedAt',
+      ExpressionAttributeNames: {
+        '#status': 'status',
+        '#updatedAt': 'updatedAt'
+      },
+      ExpressionAttributeValues: {
+        ':status': segmentId ? 'segment_secret_requested' : 'secret_requested',
+        ':updatedAt': new Date().toISOString()
+      }
+    };
+
+    await dynamodb.update(updateParams).promise();
+
+    console.log(`🔑 Secret requested for order ${orderId}${segmentId ? ` segment ${segmentId}` : ''}`);
+    if (segmentId) {
+      console.log(`📊 Segment ${segmentId} secret requested`);
+    }
+
+    // Emit WebSocket event for this specific order
+    if (global.auctionServer) {
+      const eventData = {
+        type: segmentId ? 'segment_secret_requested' : 'secret_requested',
+        orderId: orderId,
+        segmentId: segmentId,
+        timestamp: new Date().toISOString()
+      };
+      
+      global.auctionServer.broadcastToAll(eventData);
+      console.log(`📡 Emitted ${segmentId ? 'segment_secret_requested' : 'secret_requested'} event for order ${orderId}`);
+    }
+
+    res.json({
+      success: true,
+      message: segmentId ? `Secret requested for segment ${segmentId}` : 'Secret requested successfully',
+        data: {
+          orderId: orderId,
+        segmentId: segmentId,
+        verification: {
+          ethResult: ethResult,
+          xlmResult: xlmResult,
+          overallResult: true
+        },
+        timestamp: new Date().toISOString()
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error in secret request verification process:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error',
+      message: error.message
+    });
+  }
+});
+
+// PATCH /orders/:orderId endpoint - Update order data
+app.patch('/orders/:orderId', async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const updateData = req.body;
+
+    // Validate required fields
+    if (!orderId) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Missing required field: orderId'
+      });
+    }
+
+    // Get order from DynamoDB
+    const getParams = {
+      TableName: TABLE_NAME,
+      Key: { orderId: orderId }
+    };
+
+    const orderResult = await dynamodb.get(getParams).promise();
+    if (!orderResult.Item) {
+      return res.status(404).json({ 
+        success: false, 
+        error: 'Order not found' 
+      });
+    }
+
+    const order = orderResult.Item;
+    
+    // Build update expression dynamically based on provided data
+    const updateExpression = []
+    const expressionAttributeNames = {}
+    const expressionAttributeValues = {}
+
+    Object.keys(updateData).forEach(key => {
+      if (updateData[key] !== undefined && updateData[key] !== null) {
+        updateExpression.push(`#${key} = :${key}`)
+        expressionAttributeNames[`#${key}`] = key
+        expressionAttributeValues[`:${key}`] = updateData[key]
+      }
+    })
+
+    if (updateExpression.length === 0) {
+      return res.status(400).json({
+      success: false, 
+        error: 'No valid fields to update'
+      })
+    }
+
+    // Add updatedAt timestamp
+    updateExpression.push('#updatedAt = :updatedAt')
+    expressionAttributeNames['#updatedAt'] = 'updatedAt'
+    expressionAttributeValues[':updatedAt'] = new Date().toISOString()
+
+    const updateParams = {
+      TableName: TABLE_NAME,
+      Key: { orderId: orderId },
+      UpdateExpression: `SET ${updateExpression.join(', ')}`,
+      ExpressionAttributeNames: expressionAttributeNames,
+      ExpressionAttributeValues: expressionAttributeValues
+    }
+
+    await dynamodb.update(updateParams).promise()
+
+    console.log(`✅ Order ${orderId} updated successfully`)
+    console.log(`📊 Updated fields: ${Object.keys(updateData).join(', ')}`)
+
+    res.json({
+      success: true,
+      message: 'Order updated successfully',
+      data: {
+        orderId: orderId,
+        updatedFields: Object.keys(updateData),
+        timestamp: new Date().toISOString()
+      }
+    })
+    
+  } catch (error) {
+    console.error('❌ Error updating order:', error)
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error',
+      message: error.message
+    })
+  }
+})

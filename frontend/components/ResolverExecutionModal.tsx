@@ -31,7 +31,7 @@ import {
 } from 'lucide-react'
 import { useWallet } from '@/components/WalletProvider'
 import { toast } from '@/hooks/use-toast'
-import { resolverContractManager, ResolverOrderExecution } from '@/lib/resolver-contracts'
+import { resolverContractManager, ResolverOrderExecution, SourceEscrowParams, WithdrawalParams, RelayerVerificationParams } from '@/lib/resolver-contracts'
 import { useWalletClient } from 'wagmi'
 import { ethers } from 'ethers'
 
@@ -71,11 +71,67 @@ export default function ResolverExecutionModal({
   const initializeExecutionSteps = () => {
     const steps: ExecutionStep[] = [
       {
-        id: 'resolver-execution',
-        title: 'Resolver Execution',
-        description: `Executing complete resolver workflow for order ${auction?.orderId || 'N/A'} - ${auction?.fromChain || 'Source'} to ${auction?.toChain || 'Destination'} swap`,
+        id: 'resolver-declared',
+        title: 'Resolver Declared',
+        description: 'Resolver has been declared as the winner of this auction',
         status: 'pending',
-        icon: <Zap className="w-5 h-5" />
+        icon: <Trophy className="w-5 h-5" />
+      },
+      {
+        id: 'source-escrow',
+        title: 'Create Source Escrow',
+        description: `Creating source escrow on ${auction?.fromChain || 'Source'} chain`,
+        status: 'pending',
+        icon: <Building2 className="w-5 h-5" />
+      },
+      {
+        id: 'destination-escrow',
+        title: 'Create Destination Escrow',
+        description: `Creating destination escrow on ${auction?.toChain || 'Destination'} chain`,
+        status: 'pending',
+        icon: <Building2 className="w-5 h-5" />
+      },
+      {
+        id: 'escrows-verified',
+        title: 'Verify Escrows',
+        description: 'Verifying both escrows have correct amounts and timelock conditions',
+        status: 'pending',
+        icon: <Shield className="w-5 h-5" />
+      },
+      {
+        id: 'withdrawal-timer',
+        title: 'Withdrawal Window',
+        description: 'Waiting for withdrawal window to open (60 seconds)',
+        status: 'pending',
+        icon: <Timer className="w-5 h-5" />
+      },
+      {
+        id: 'secret-request',
+        title: 'Request Secret',
+        description: 'Requesting secret from buyer via relayer',
+        status: 'pending',
+        icon: <Key className="w-5 h-5" />
+      },
+      {
+        id: 'source-withdrawal',
+        title: 'Source Withdrawal',
+        description: 'Withdrawing from source escrow (resolver receives tokens)',
+        status: 'pending',
+        icon: <Coins className="w-5 h-5" />
+      },
+      {
+        id: 'destination-withdrawal',
+        title: 'Destination Withdrawal',
+        description: 'Withdrawing from destination escrow (buyer receives tokens)',
+        status: 'pending',
+        icon: <Coins className="w-5 h-5" />
+      },
+      {
+        id: 'completion',
+        title: 'Order Completed',
+        description: 'Swap completed successfully!',
+        status: 'pending',
+        icon: <CheckCircle className="w-5 h-5" />
       }
     ]
     setExecutionSteps(steps)
@@ -122,9 +178,14 @@ export default function ResolverExecutionModal({
     console.log('🔍 ResolverExecutionModal - buyer address:', auction.buyerAddress)
 
     setIsExecuting(true)
-    updateStepStatus('resolver-execution', 'in-progress')
     
     try {
+      // Step 1: Resolver Declared
+      updateStepStatus('resolver-declared', 'completed', {
+        message: 'Resolver has been declared as the winner of this auction',
+        timestamp: new Date().toISOString()
+      })
+      
       // Get resolver address based on source chain (user is the resolver)
       const sourceChain = mapChainName(auction.fromChain)
       const destinationChain = mapChainName(auction.toChain)
@@ -187,30 +248,203 @@ export default function ResolverExecutionModal({
         stellarSecretKey
       }
       
-      // Execute the complete resolver flow with progress updates
-      const result = await resolverContractManager.executeCompleteResolverFlow(
-        orderExecution,
-        (step, status, details) => {
-          console.log(`📊 Progress update: ${step} - ${status}`, details)
-          updateStepStatus('resolver-execution', status, details)
-        }
-      )
+      // Step 2: Create Source Escrow (on source chain)
+      updateStepStatus('source-escrow', 'in-progress')
+      console.log('📝 Step 2: Creating source escrow on source chain...')
       
-      if (!result.success) {
-        throw new Error(result.error || 'Resolver flow failed')
+      const sourceParams: SourceEscrowParams = {
+        orderId: orderExecution.orderId,
+        buyerAddress: orderExecution.buyerAddress,
+        resolverAddress: orderExecution.resolverAddress,
+        srcAmount: orderExecution.sourceAmount,
+        hashedSecret: orderExecution.hashedSecret,
+        isPartialFill: orderExecution.isPartialFill,
+        segmentIndex: orderExecution.segmentIndex,
+        totalParts: orderExecution.totalParts
       }
       
-      updateStepStatus('resolver-execution', 'completed', {
-        success: true,
-        message: 'Resolver workflow completed successfully',
-        timestamp: new Date().toISOString()
+      // Create source escrow on the SOURCE chain
+      const sourceResult = orderExecution.sourceChain === 'stellar-testnet'
+        ? await resolverContractManager.createSourceEscrowStellar(orderExecution.sourceChain, sourceParams)
+        : await resolverContractManager.createSourceEscrowEVM(orderExecution.sourceChain, sourceParams, orderExecution.evmSigner!)
+      
+      if (!sourceResult.success) {
+        updateStepStatus('source-escrow', 'failed', { error: sourceResult.error })
+        throw new Error(`Source escrow creation failed: ${sourceResult.error}`)
+      }
+      
+      updateStepStatus('source-escrow', 'completed', {
+        escrowAddress: sourceResult.escrowAddress,
+        transactionHash: sourceResult.transactionHash,
+        message: `Source escrow created successfully on ${orderExecution.sourceChain}`
+      })
+      
+      // Step 3: Create Destination Escrow (on destination chain)
+      updateStepStatus('destination-escrow', 'in-progress')
+      console.log('📝 Step 3: Creating destination escrow on destination chain...')
+      
+      // Create destination escrow on the DESTINATION chain
+      const destinationResult = orderExecution.destinationChain === 'stellar-testnet'
+        ? await resolverContractManager.createDestinationEscrowStellar(
+            orderExecution.destinationChain,
+            orderExecution.hashedSecret,
+            orderExecution.buyerAddress,
+            orderExecution.destinationAmount,
+            orderExecution.isPartialFill,
+            orderExecution.segmentIndex,
+            orderExecution.totalParts
+          )
+        : await resolverContractManager.createDestinationEscrowEVM(
+            orderExecution.destinationChain,
+            orderExecution.orderId,
+            orderExecution.hashedSecret,
+            orderExecution.buyerAddress,
+            orderExecution.destinationAmount,
+            orderExecution.evmSigner!,
+            orderExecution.isPartialFill,
+            orderExecution.segmentIndex,
+            orderExecution.totalParts
+          )
+      
+      if (!destinationResult.success) {
+        updateStepStatus('destination-escrow', 'failed', { error: destinationResult.error })
+        throw new Error(`Destination escrow creation failed: ${destinationResult.error}`)
+      }
+      
+      updateStepStatus('destination-escrow', 'completed', {
+        escrowAddress: destinationResult.escrowAddress,
+        transactionHash: destinationResult.transactionHash,
+        message: `Destination escrow created successfully on ${orderExecution.destinationChain}`
+      })
+      
+      // Step 4: Verify Escrows
+      updateStepStatus('escrows-verified', 'in-progress')
+      console.log('📝 Step 4: Verifying escrows...')
+      
+      const verificationParams: RelayerVerificationParams = {
+        orderId: orderExecution.orderId,
+        sourceEscrowAddress: sourceResult.escrowAddress!,
+        destinationEscrowAddress: destinationResult.escrowAddress!,
+        sourceChain: orderExecution.sourceChain,
+        destinationChain: orderExecution.destinationChain,
+        withdrawalStart: Math.floor(Date.now() / 1000) + 60
+      }
+      
+      const verificationResult = await resolverContractManager.requestRelayerVerification(verificationParams)
+      if (!verificationResult.success) {
+        updateStepStatus('escrows-verified', 'failed', { error: verificationResult.error })
+        throw new Error(`Escrow verification failed: ${verificationResult.error}`)
+      }
+      
+      updateStepStatus('escrows-verified', 'completed', {
+        message: 'Both escrows verified successfully',
+        sourceEscrow: sourceResult.escrowAddress,
+        destinationEscrow: destinationResult.escrowAddress
+      })
+      
+      // Step 5: Withdrawal Timer
+      updateStepStatus('withdrawal-timer', 'in-progress', {
+        message: 'Escrows deployed successfully. Starting 60-second withdrawal window timer.'
+      })
+      console.log('⏰ Step 5: Starting 60-second withdrawal window timer...')
+      
+      const withdrawalStart = Math.floor(Date.now() / 1000) + 60
+      await resolverContractManager.waitForWithdrawalWindow(withdrawalStart)
+      
+      updateStepStatus('withdrawal-timer', 'completed', {
+        message: 'Withdrawal window is now open. Requesting secret from buyer.'
+      })
+      
+      // Step 6: Request Secret
+      updateStepStatus('secret-request', 'in-progress')
+      console.log('🔑 Step 6: Requesting secret from buyer via relayer...')
+      
+      const secretResult = await resolverContractManager.requestSecretFromBuyer(orderExecution.orderId, orderExecution.segmentIndex)
+      if (!secretResult.success) {
+        updateStepStatus('secret-request', 'failed', { error: secretResult.error })
+        throw new Error(`Secret request failed: ${secretResult.error}`)
+      }
+      
+      updateStepStatus('secret-request', 'completed', {
+        secretReceived: true,
+        message: 'Secret received from buyer. Proceeding with withdrawals.'
+      })
+      
+      // Step 7: Source Withdrawal (resolver gets source tokens)
+      updateStepStatus('source-withdrawal', 'in-progress')
+      console.log('💰 Step 7: Executing source withdrawal (resolver gets source tokens)...')
+      
+      const sourceWithdrawalParams: WithdrawalParams = {
+        orderId: orderExecution.orderId,
+        escrowAddress: sourceResult.escrowAddress!,
+        secret: secretResult.secret!,
+        chainId: orderExecution.sourceChain,
+        isSource: true,
+        isPartialFill: orderExecution.isPartialFill,
+        merkleProof: orderExecution.merkleProof,
+        segmentIndex: orderExecution.segmentIndex
+      }
+      
+      const sourceWithdrawalResult = orderExecution.sourceChain === 'stellar-testnet'
+        ? await resolverContractManager.withdrawFromStellarEscrow(sourceWithdrawalParams)
+        : await resolverContractManager.withdrawFromEVMEscrow(sourceWithdrawalParams, orderExecution.evmSigner!)
+      
+      if (!sourceWithdrawalResult.success) {
+        updateStepStatus('source-withdrawal', 'failed', { error: sourceWithdrawalResult.error })
+        throw new Error(`Source withdrawal failed: ${sourceWithdrawalResult.error}`)
+      }
+      
+      updateStepStatus('source-withdrawal', 'completed', {
+        transactionHash: sourceWithdrawalResult.transactionHash,
+        message: `Source withdrawal completed successfully on ${orderExecution.sourceChain}`
+      })
+      
+      // Step 8: Destination Withdrawal (buyer gets destination tokens)
+      updateStepStatus('destination-withdrawal', 'in-progress')
+      console.log('💰 Step 8: Executing destination withdrawal (buyer gets destination tokens)...')
+      
+      const destinationWithdrawalParams: WithdrawalParams = {
+        orderId: orderExecution.orderId,
+        escrowAddress: destinationResult.escrowAddress!,
+        secret: secretResult.secret!,
+        chainId: orderExecution.destinationChain,
+        isSource: false,
+        isPartialFill: orderExecution.isPartialFill,
+        merkleProof: orderExecution.merkleProof,
+        segmentIndex: orderExecution.segmentIndex
+      }
+      
+      const destinationWithdrawalResult = orderExecution.destinationChain === 'stellar-testnet'
+        ? await resolverContractManager.withdrawFromStellarEscrow(destinationWithdrawalParams)
+        : await resolverContractManager.withdrawFromEVMEscrow(destinationWithdrawalParams, orderExecution.evmSigner!)
+      
+      if (!destinationWithdrawalResult.success) {
+        updateStepStatus('destination-withdrawal', 'failed', { error: destinationWithdrawalResult.error })
+        throw new Error(`Destination withdrawal failed: ${destinationWithdrawalResult.error}`)
+      }
+      
+      updateStepStatus('destination-withdrawal', 'completed', {
+        transactionHash: destinationWithdrawalResult.transactionHash,
+        message: `Destination withdrawal completed successfully on ${orderExecution.destinationChain}`
+      })
+      
+      // Step 9: Completion
+      updateStepStatus('completion', 'completed', {
+        orderCompleted: true,
+        sourceEscrowAddress: sourceResult.escrowAddress,
+        destinationEscrowAddress: destinationResult.escrowAddress,
+        sourceWithdrawalHash: sourceWithdrawalResult.transactionHash,
+        destinationWithdrawalHash: destinationWithdrawalResult.transactionHash,
+        message: 'Swap completed successfully!'
       })
       
       console.log('🎉 Complete resolver workflow executed successfully!')
       
+      // Notify relayer of order completion
+      await resolverContractManager.notifyOrderCompleted(orderExecution.orderId, orderExecution.segmentIndex)
+      
     } catch (error) {
       console.error('❌ Resolver workflow failed:', error)
-      updateStepStatus('resolver-execution', 'failed', undefined, error instanceof Error ? error.message : 'Unknown error')
       toast({
         title: "Resolver Execution Failed",
         description: error instanceof Error ? error.message : "Unknown error occurred",
@@ -389,24 +623,24 @@ export default function ResolverExecutionModal({
               <ArrowUpDown className="w-5 h-5 text-purple-400" />
               <h3 className="text-white font-semibold text-lg">Execution Progress</h3>
             </div>
-            {executionSteps.map((step, index) => (
-              <motion.div
-                key={step.id}
+              {executionSteps.map((step, index) => (
+                <motion.div
+                  key={step.id}
                 initial={{ opacity: 0, x: -20 }}
                 animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: index * 0.1 }}
+                  transition={{ delay: index * 0.1 }}
                 className={`p-4 rounded-2xl border backdrop-blur-sm ${getStepBgColor(step)}`}
               >
                 <div className="flex items-start gap-4">
-                  {getStepIcon(step)}
-                  <div className="flex-1">
+                    {getStepIcon(step)}
+                    <div className="flex-1">
                     <h4 className={`font-semibold ${getStepStatusColor(step)}`}>
                       {step.title}
                     </h4>
                     <p className="text-sm text-white/70 mt-1">
                       {step.description}
                     </p>
-                    {step.details && (
+                      {step.details && (
                       <div className="mt-3 p-3 bg-black/20 rounded-lg border border-white/10">
                         <div className="text-xs text-white/60 mb-2">Transaction Details:</div>
                         <div className="text-xs text-white/80 font-mono space-y-1">
@@ -417,18 +651,18 @@ export default function ResolverExecutionModal({
                             </div>
                           ))}
                         </div>
-                      </div>
-                    )}
-                    {step.error && (
+                        </div>
+                      )}
+                      {step.error && (
                       <div className="mt-3 p-3 bg-red-500/10 border border-red-500/20 rounded-lg">
                         <div className="text-xs text-red-400 font-medium">Error:</div>
                         <div className="text-xs text-red-300 mt-1">{step.error}</div>
-                      </div>
+                    </div>
                     )}
                   </div>
-                </div>
-              </motion.div>
-            ))}
+                  </div>
+                </motion.div>
+              ))}
           </div>
 
           {/* Action Buttons */}
@@ -441,8 +675,8 @@ export default function ResolverExecutionModal({
             >
               Close
             </Button>
-            {executionSteps.find(step => step.id === 'resolver-execution')?.status === 'completed' && (
-              <Button
+            {executionSteps.find(step => step.id === 'completion')?.status === 'completed' && (
+            <Button
                 onClick={onExecutionComplete}
                 className="bg-green-500/20 hover:bg-green-500/30 text-green-300 border border-green-500/30"
               >
