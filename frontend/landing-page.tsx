@@ -11,6 +11,7 @@ import {
   ArrowLeftRight,
   Users,
   Wallet,
+  Star,
 } from "lucide-react"
 import Dither from "./components/Dither"
 import { useWallet } from "./components/WalletProvider"
@@ -23,7 +24,34 @@ export default function LandingPage({
   onEnterResolver: () => void 
 }) {
   const [isHovered, setIsHovered] = useState(false)
-  const { isConnected, address, connect, disconnect, isLoading } = useWallet()
+  const { 
+    isConnected, 
+    address, 
+    connect, 
+    disconnect, 
+    isLoading,
+    stellarWallet,
+    connectStellar,
+    disconnectStellar,
+    isStellarLoading,
+    isMounted
+  } = useWallet()
+
+  const handleConnectEthereum = async () => {
+    try {
+      await connect()
+    } catch (error) {
+      console.error("Failed to connect Ethereum wallet:", error)
+    }
+  }
+
+  const handleConnectStellar = async () => {
+    try {
+      await connectStellar()
+    } catch (error) {
+      console.error("Failed to connect Stellar wallet:", error)
+    }
+  }
 
   return (
     <div className="min-h-screen bg-black text-white relative overflow-hidden">
@@ -57,31 +85,72 @@ export default function LandingPage({
             <span className="text-xl font-bold">StellarFusion</span>
           </div>
 
-          <div className="flex items-center gap-6">
-            {!isConnected ? (
+          <div className="flex items-center gap-4">
+            {/* Wallet Connection Status */}
+            <div className="flex items-center gap-2">
+              {/* Ethereum Wallet Status */}
+              <div className="flex items-center gap-2">
+                <div className={`w-2 h-2 rounded-full ${isMounted && isConnected ? 'bg-green-400' : 'bg-red-400'}`} />
+                <span className="text-xs text-white/60">ETH</span>
+              </div>
+              
+              {/* Stellar Wallet Status */}
+              <div className="flex items-center gap-2">
+                <div className={`w-2 h-2 rounded-full ${isMounted && stellarWallet?.isConnected ? 'bg-green-400' : 'bg-red-400'}`} />
+                <span className="text-xs text-white/60">XLM</span>
+              </div>
+            </div>
+
+            {/* Connect Buttons */}
+            {isMounted && !isConnected && (
               <Button
                 variant="outline"
+                size="sm"
                 className="border-white/20 text-white hover:bg-white/10 backdrop-blur-sm bg-transparent"
-                onClick={connect}
+                onClick={handleConnectEthereum}
                 disabled={isLoading}
               >
-                <Wallet className="w-4 h-4 mr-2" />
-                {isLoading ? "Connecting..." : "Connect Wallet"}
+                <Wallet className="w-3 h-3 mr-1" />
+                {isLoading ? "Connecting..." : "MetaMask"}
               </Button>
-            ) : (
-              <div className="flex items-center gap-4">
-                <span className="text-white/80 text-sm">
-                  {address?.slice(0, 6)}...{address?.slice(-4)}
-                </span>
-                <Button
-                  variant="outline"
-                  className="border-white/20 text-white hover:bg-white/10 backdrop-blur-sm bg-transparent"
-                  onClick={disconnect}
-                >
-                  Disconnect
-                </Button>
-              </div>
             )}
+
+            {isMounted && !stellarWallet?.isConnected && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="border-white/20 text-white hover:bg-white/10 backdrop-blur-sm bg-transparent"
+                onClick={handleConnectStellar}
+                disabled={isStellarLoading}
+              >
+                <Star className="w-3 h-3 mr-1" />
+                {isStellarLoading ? "Connecting..." : "Freighter"}
+              </Button>
+            )}
+
+            {/* Disconnect Buttons */}
+            {isMounted && isConnected && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="border-white/20 text-white hover:bg-white/10 backdrop-blur-sm bg-transparent"
+                onClick={disconnect}
+              >
+                Disconnect ETH
+              </Button>
+            )}
+
+            {isMounted && stellarWallet?.isConnected && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="border-white/20 text-white hover:bg-white/10 backdrop-blur-sm bg-transparent"
+                onClick={disconnectStellar}
+              >
+                Disconnect XLM
+              </Button>
+            )}
+
             <Button
               variant="outline"
               className="border-white/20 text-white hover:bg-white/10 backdrop-blur-sm bg-transparent"

@@ -26,7 +26,7 @@ import Aurora from "./Aurora"
 import OrderDetails from "./OrderDetails"
 import PartialFillSettings from "./PartialFillSettings"
 import LoadingModal from "./LoadingModal"
-import { createOrder, sendOrderToRelayer, prepareBuyer, OrderData } from "@/lib/order-utils"
+import { createOrder, sendOrderToRelayer, prepareBuyer, prepareStellarBuyer, OrderData } from "@/lib/order-utils"
 import { toast } from "@/components/ui/use-toast"
 
 interface Token {
@@ -116,7 +116,20 @@ const mockTokens: Token[] = [
 ]
 
 export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => void }) {
-  const { isConnected, address, connect, disconnect, isLoading } = useWallet()
+  const { 
+    isConnected, 
+    address, 
+    connect, 
+    disconnect, 
+    isLoading,
+    stellarWallet,
+    connectStellar,
+    disconnectStellar,
+    isStellarLoading,
+    updateCounter,
+    balanceRef,
+    isMounted
+  } = useWallet()
   const { data: walletClient } = useWalletClient()
   
   const [swapState, setSwapState] = useState<SwapState>({
@@ -134,6 +147,30 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
   const [priceData, setPriceData] = useState<PriceData>({})
   const [currentUsdValue, setCurrentUsdValue] = useState(0)
   const [tokensWithBalances, setTokensWithBalances] = useState<Token[]>(mockTokens)
+  
+  // Debug: Log current state on every render
+  console.log("🎯 SwapInterface Render Debug:")
+  console.log("   - Stellar wallet:", stellarWallet)
+  console.log("   - Stellar connected:", stellarWallet?.isConnected)
+  console.log("   - Stellar balance:", stellarWallet?.balance)
+  console.log("   - Update counter:", updateCounter)
+  console.log("   - Tokens with balances:", tokensWithBalances)
+
+  // Monitor Stellar wallet changes
+  useEffect(() => {
+    console.log("🔄 Stellar wallet changed:", stellarWallet)
+    if (stellarWallet?.isConnected) {
+      console.log("✅ Stellar wallet is connected, balance:", stellarWallet.balance)
+    }
+  }, [stellarWallet])
+
+  // Monitor balanceRef changes
+  useEffect(() => {
+    console.log("🔄 Balance ref changed:", balanceRef.current)
+    if (balanceRef.current !== '0') {
+      console.log("💰 Balance ref has non-zero value:", balanceRef.current)
+    }
+  }, [updateCounter]) // Re-run when updateCounter changes
   
   // Order creation state
   const [enablePartialFills, setEnablePartialFills] = useState(false)
@@ -175,33 +212,48 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
 
   // Update token balances when wallet connects or ETH balance changes
   useEffect(() => {
-    if (isConnected && address && ethBalance) {
-      const updatedTokens = mockTokens.map(token => {
-        if (token.symbol === "ETH" || token.symbol === "Sepolia ETH") {
-          return {
-            ...token,
-            balance: parseFloat(ethBalance.formatted),
-            usdValue: parseFloat(ethBalance.formatted) * (priceData.ethereum?.usd || 0)
-          }
-        }
-        // For other tokens, you would fetch their balances here
+    console.log("🔄 Updating token balances...")
+    console.log("📊 Stellar wallet state:", stellarWallet)
+    console.log("💰 Stellar balance:", stellarWallet?.balance)
+    console.log("🔗 Stellar connected:", stellarWallet?.isConnected)
+    
+    const updatedTokens = mockTokens.map(token => {
+      if (token.symbol === "ETH" || token.symbol === "Sepolia ETH") {
         return {
           ...token,
-          balance: Math.random() * 100, // Mock balance for other tokens
-          usdValue: 0
+          balance: isConnected && ethBalance ? parseFloat(ethBalance.formatted) : 0,
+          usdValue: isConnected && ethBalance ? parseFloat(ethBalance.formatted) * (priceData.ethereum?.usd || 0) : 0
         }
-      })
-      
-      setTokensWithBalances(updatedTokens)
-      
-      // Update swap state with first available tokens
-      setSwapState(prev => ({
-        ...prev,
-        fromToken: updatedTokens.find(t => t.chain === "Ethereum") || null,
-        toToken: updatedTokens.find(t => t.chain === "Stellar") || null
-      }))
-    }
-  }, [isConnected, address, ethBalance, priceData])
+      }
+      if (token.symbol === "XLM") {
+        const xlmBalance = stellarWallet?.isConnected ? parseFloat(stellarWallet.balance) : 0
+        const xlmUsdValue = stellarWallet?.isConnected ? parseFloat(stellarWallet.balance) * (priceData.stellar?.usd || 0) : 0
+        
+        console.log("⭐ XLM token update:")
+        console.log("   - Connected:", stellarWallet?.isConnected)
+        console.log("   - Raw balance:", stellarWallet?.balance)
+        console.log("   - Parsed balance:", xlmBalance)
+        console.log("   - USD value:", xlmUsdValue)
+        
+        return {
+          ...token,
+          balance: xlmBalance,
+          usdValue: xlmUsdValue
+        }
+      }
+      return token
+    })
+    
+    console.log("📋 Updated tokens:", updatedTokens)
+    setTokensWithBalances(updatedTokens)
+    
+    // Update swap state with first available tokens
+    setSwapState(prev => ({
+      ...prev,
+      fromToken: updatedTokens.find(t => t.chain === "Ethereum") || null,
+      toToken: updatedTokens.find(t => t.chain === "Stellar") || null
+    }))
+  }, [isConnected, address, ethBalance, stellarWallet, priceData])
 
   // Calculate USD value when amount or price data changes
   useEffect(() => {
@@ -303,6 +355,13 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
                   swapState.fromAmount && parseFloat(swapState.fromAmount) > 0 &&
                   parseFloat(swapState.fromAmount) <= (swapState.fromToken?.balance || 0)
 
+  // Check if required wallets are connected
+  const isEthereumRequired = swapState.fromChain === "Ethereum" || swapState.toChain === "Ethereum"
+  const isStellarRequired = swapState.fromChain === "Stellar" || swapState.toChain === "Stellar"
+  
+  const ethereumWalletConnected = isConnected
+  const stellarWalletConnected = stellarWallet?.isConnected
+
   // Order creation functions
   const handleCreateOrder = () => {
     if (!swapState.fromToken || !swapState.toToken || !swapState.fromAmount || !swapState.toAmount) {
@@ -314,10 +373,20 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
       return
     }
 
-    if (!address) {
+    // Check wallet connections
+    if (isEthereumRequired && !ethereumWalletConnected) {
       toast({
-        title: "Wallet Not Connected",
-        description: "Please connect your wallet to create an order.",
+        title: "Ethereum Wallet Required",
+        description: "Please connect your MetaMask wallet to create this order.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    if (isStellarRequired && !stellarWalletConnected) {
+      toast({
+        title: "Stellar Wallet Required",
+        description: "Please connect your Freighter wallet to create this order.",
         variant: "destructive",
       })
       return
@@ -336,7 +405,7 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
       }
       
       const orderData = createOrder({
-        buyerAddress: address,
+        buyerAddress: address || stellarWallet?.publicKey || "",
         sourceChain: swapState.fromChain.toLowerCase(),
         destinationChain: swapState.toChain.toLowerCase(),
         sourceToken: getTokenKey(swapState.fromToken),
@@ -379,20 +448,38 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
       console.log('\n📋 STEP 1: Buyer Preparation');
       console.log('-----------------------------');
       
-      if (!address) {
-        throw new Error('Wallet not connected');
+      // Handle Ethereum approvals
+      if (swapState.fromChain === "Ethereum" || swapState.toChain === "Ethereum") {
+        if (!address) {
+          throw new Error('Ethereum wallet not connected');
+        }
+        
+        if (!walletClient) {
+          throw new Error('Ethereum wallet client not available');
+        }
+        
+        await prepareBuyer(
+          orderData.srcChainId as string,
+          orderData.srcToken as string,
+          orderData.srcAmount as string,
+          walletClient
+        );
       }
       
-      if (!walletClient) {
-        throw new Error('Wallet client not available');
+      // Handle Stellar approvals (if needed)
+      if (swapState.fromChain === "Stellar" || swapState.toChain === "Stellar") {
+        if (!stellarWallet?.isConnected) {
+          throw new Error('Stellar wallet not connected');
+        }
+        
+        // For Stellar, we might need to handle trustlines or other approvals
+        console.log('🔐 Stellar wallet connected, proceeding with order...');
+        await prepareStellarBuyer(
+          orderData.srcToken as string,
+          orderData.srcAmount as string,
+          stellarWallet
+        );
       }
-      
-      await prepareBuyer(
-        orderData.srcChainId as string,
-        orderData.srcToken as string,
-        orderData.srcAmount as string,
-        walletClient
-      );
       
       setLoadingStep(3); // Step 3: Sending to relayer
       
@@ -429,6 +516,49 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
     }
   };
 
+  const handleRefreshXLM = async () => {
+    try {
+      console.log("🔄 Manually refreshing XLM balance...")
+      await connectStellar()
+      console.log("✅ XLM balance refreshed")
+    } catch (error) {
+      console.error("❌ Failed to refresh XLM balance:", error)
+    }
+  }
+
+  const handleTestBalance = async () => {
+    try {
+      console.log("🧪 Testing balance fetch directly...")
+      if (!stellarWallet?.publicKey) {
+        console.log("❌ No public key available")
+        return
+      }
+      
+      const horizonUrl = 'https://horizon-testnet.stellar.org'
+      const response = await fetch(`${horizonUrl}/accounts/${stellarWallet.publicKey}`)
+      console.log("📊 Direct API response status:", response.status)
+      
+      if (response.ok) {
+        const accountData = await response.json()
+        console.log("📋 Direct account data:", accountData)
+        
+        const xlmBalance = accountData.balances.find((balance: any) => 
+          balance.asset_type === 'native'
+        )
+        console.log("💰 Direct XLM balance found:", xlmBalance)
+        
+        if (xlmBalance) {
+          console.log("✅ Direct balance:", xlmBalance.balance)
+          alert(`Direct balance: ${xlmBalance.balance} XLM`)
+        }
+      } else {
+        console.log("❌ Direct API error:", await response.text())
+      }
+    } catch (error) {
+      console.error("❌ Direct balance test failed:", error)
+    }
+  }
+
   return (
     <div className="min-h-screen bg-black text-white relative overflow-hidden">
       {/* Aurora Background with White Colors */}
@@ -449,15 +579,15 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
           transition={{ duration: 0.6 }}
           className="fixed top-8 left-8 z-50"
         >
-                      <Button
-              variant="outline"
-              size="sm"
-              className="border-white/20 text-white hover:bg-white/10 backdrop-blur-sm bg-transparent"
-              onClick={onBackToHome}
-            >
-              <ArrowLeft className="w-4 h-4 mr-2" />
-              Back to Home
-            </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="border-white/20 text-white hover:bg-white/10 backdrop-blur-sm bg-transparent"
+            onClick={onBackToHome}
+          >
+            <ArrowLeft className="w-4 h-4 mr-2" />
+            Back to Home
+          </Button>
         </motion.div>
       )}
 
@@ -482,19 +612,61 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
                   Swap
                 </Button>
               </div>
+              
+              {/* Wallet Status Indicators */}
+              <div className="flex items-center gap-2">
+                <div className={`w-2 h-2 rounded-full ${ethereumWalletConnected ? 'bg-green-400' : 'bg-red-400'}`} />
+                <span className="text-xs text-white/60">ETH</span>
+                <div className={`w-2 h-2 rounded-full ${stellarWalletConnected ? 'bg-green-400' : 'bg-red-400'}`} />
+                <span className="text-xs text-white/60">XLM</span>
+              </div>
             </div>
 
             {/* Wallet Connection Status */}
-            {!isConnected ? (
+            {(!ethereumWalletConnected && isEthereumRequired) || (!stellarWalletConnected && isStellarRequired) ? (
               <div className="text-center py-8">
                 <Wallet className="w-12 h-12 mx-auto mb-4 text-white/60" />
-                <h3 className="text-lg font-semibold mb-2 text-white">Wallet Not Connected</h3>
-                <p className="text-white/60 mb-6">Please connect your wallet from the home page to start swapping tokens</p>
+                <h3 className="text-lg font-semibold mb-2 text-white">Wallets Required</h3>
+                <p className="text-white/60 mb-6">
+                  {!ethereumWalletConnected && isEthereumRequired && !stellarWalletConnected && isStellarRequired
+                    ? "Please connect both MetaMask and Freighter wallets"
+                    : !ethereumWalletConnected && isEthereumRequired
+                    ? "Please connect your MetaMask wallet"
+                    : "Please connect your Freighter wallet"
+                  }
+                </p>
+                
+                <div className="flex flex-col gap-3">
+                  {!ethereumWalletConnected && isEthereumRequired && (
+                    <Button
+                      onClick={connect}
+                      disabled={isLoading}
+                      className="bg-blue-600 hover:bg-blue-700 text-white"
+                    >
+                      <Wallet className="w-4 h-4 mr-2" />
+                      {isLoading ? "Connecting..." : "Connect MetaMask"}
+                    </Button>
+                  )}
+                  
+                  {!stellarWalletConnected && isStellarRequired && (
+                    <Button
+                      onClick={connectStellar}
+                      disabled={isStellarLoading}
+                      className="bg-purple-600 hover:bg-purple-700 text-white"
+                    >
+                      <Star className="w-4 h-4 mr-2" />
+                      {isStellarLoading ? "Connecting..." : "Connect Freighter"}
+                    </Button>
+                  )}
+                </div>
+                
                 <Button
+                  variant="ghost"
+                  size="sm"
                   onClick={onBackToHome}
-                  className="bg-white text-black hover:bg-gray-100 font-semibold px-8 py-3"
+                  className="text-xs text-white/40 hover:text-white hover:bg-white/10 mt-4"
                 >
-                  Go to Home
+                  Manage Wallets
                 </Button>
               </div>
             ) : (
@@ -518,32 +690,32 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
                     </div>
                   </div>
                   
-                                     <div className="flex items-center justify-between">
-                     <div className="flex items-center space-x-3 min-w-0 flex-1">
-                       <Button
-                         variant="ghost"
-                         onClick={() => openTokenSelector("from")}
-                         className="flex items-center space-x-2 bg-white/10 hover:bg-white/20 text-white p-2 rounded-xl flex-shrink-0"
-                       >
-                         <span className="text-xl">{swapState.fromToken?.icon || "🔷"}</span>
-                         <span className="font-semibold">{swapState.fromToken?.symbol || "Select"}</span>
-                         <ChevronDown className="w-4 h-4" />
-                       </Button>
-                     </div>
-                     
-                     <div className="text-right min-w-0 flex-1 ml-4">
-                       <Input
-                         type="number"
-                         value={swapState.fromAmount}
-                         onChange={(e) => handleFromAmountChange(e.target.value)}
-                         placeholder="0.0"
-                         className="text-right text-2xl font-bold bg-transparent border-none text-white placeholder-white/40 focus:ring-0 w-full"
-                       />
-                       <div className="text-sm text-white/60 truncate">
-                         ~${currentUsdValue.toFixed(2)}
-                       </div>
-                     </div>
-                   </div>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-3 min-w-0 flex-1">
+                      <Button
+                        variant="ghost"
+                        onClick={() => openTokenSelector("from")}
+                        className="flex items-center space-x-2 bg-white/10 hover:bg-white/20 text-white p-2 rounded-xl flex-shrink-0"
+                      >
+                        <span className="text-xl">{swapState.fromToken?.icon || "🔷"}</span>
+                        <span className="font-semibold">{swapState.fromToken?.symbol || "Select"}</span>
+                        <ChevronDown className="w-4 h-4" />
+                      </Button>
+                    </div>
+                    
+                    <div className="text-right min-w-0 flex-1 ml-4">
+                      <Input
+                        type="number"
+                        value={swapState.fromAmount}
+                        onChange={(e) => handleFromAmountChange(e.target.value)}
+                        placeholder="0.0"
+                        className="text-right text-2xl font-bold bg-transparent border-none text-white placeholder-white/40 focus:ring-0 w-full"
+                      />
+                      <div className="text-sm text-white/60 truncate">
+                        ~${currentUsdValue.toFixed(2)}
+                      </div>
+                    </div>
+                  </div>
                   
                   <div className="mt-2 text-xs text-white/40">
                     on {swapState.fromChain}
@@ -570,37 +742,37 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
                     </span>
                   </div>
                   
-                                     <div className="flex items-center justify-between">
-                     <div className="flex items-center space-x-3 min-w-0 flex-1">
-                       <Button
-                         variant="ghost"
-                         onClick={() => openTokenSelector("to")}
-                         className="flex items-center space-x-2 bg-white/10 hover:bg-white/20 text-white p-2 rounded-xl flex-shrink-0"
-                       >
-                         <span className="text-xl">{swapState.toToken?.icon || "⭐"}</span>
-                         <span className="font-semibold">{swapState.toToken?.symbol || "Select"}</span>
-                         <ChevronDown className="w-4 h-4" />
-                       </Button>
-                     </div>
-                     
-                     <div className="text-right min-w-0 flex-1 ml-4">
-                       <div className="text-2xl font-bold text-white truncate">
-                         {swapState.toAmount || "0.0"}
-                       </div>
-                       <div className="text-sm text-white/60 truncate">
-                         ~${(() => {
-                           if (swapState.toAmount && swapState.toToken && priceData) {
-                             const amount = parseFloat(swapState.toAmount)
-                             const tokenId = swapState.toToken.coingeckoId
-                             if (tokenId && priceData[tokenId]) {
-                               return (amount * priceData[tokenId].usd).toFixed(2)
-                             }
-                           }
-                           return "0.00"
-                         })()}
-                       </div>
-                     </div>
-                   </div>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-3 min-w-0 flex-1">
+                      <Button
+                        variant="ghost"
+                        onClick={() => openTokenSelector("to")}
+                        className="flex items-center space-x-2 bg-white/10 hover:bg-white/20 text-white p-2 rounded-xl flex-shrink-0"
+                      >
+                        <span className="text-xl">{swapState.toToken?.icon || "⭐"}</span>
+                        <span className="font-semibold">{swapState.toToken?.symbol || "Select"}</span>
+                        <ChevronDown className="w-4 h-4" />
+                      </Button>
+                    </div>
+                    
+                    <div className="text-right min-w-0 flex-1 ml-4">
+                      <div className="text-2xl font-bold text-white truncate">
+                        {swapState.toAmount || "0.0"}
+                      </div>
+                      <div className="text-sm text-white/60 truncate">
+                        ~${(() => {
+                          if (swapState.toAmount && swapState.toToken && priceData) {
+                            const amount = parseFloat(swapState.toAmount)
+                            const tokenId = swapState.toToken.coingeckoId
+                            if (tokenId && priceData[tokenId]) {
+                              return (amount * priceData[tokenId].usd).toFixed(2)
+                            }
+                          }
+                          return "0.00"
+                        })()}
+                      </div>
+                    </div>
+                  </div>
                   
                   <div className="mt-2 text-xs text-white/40">
                     on {swapState.toChain}
@@ -679,17 +851,54 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
 
                 {/* Wallet Info */}
                 <div className="mt-4 text-center">
-                  <div className="text-sm text-white/60">
-                    Connected: {address?.slice(0, 6)}...{address?.slice(-4)}
+                  <div className="text-sm text-white/60 mb-2">
+                    {isMounted && ethereumWalletConnected && (
+                      <div>ETH: {address?.slice(0, 6)}...{address?.slice(-4)}</div>
+                    )}
+                    {isMounted && stellarWalletConnected && (
+                      <div>
+                        <div>XLM: {stellarWallet.publicKey.slice(0, 6)}...{stellarWallet.publicKey.slice(-4)}</div>
+                        <div className="text-xs text-white/40 mt-1">
+                          Balance: {parseFloat(stellarWallet.balance || balanceRef.current).toFixed(4)} XLM
+                          {/* Debug info */}
+                          <div className="text-xs text-red-400 mt-1">
+                            Debug: Raw={stellarWallet.balance || balanceRef.current}, Parsed={parseFloat(stellarWallet.balance || balanceRef.current)}
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
-                                     <Button
-                     variant="ghost"
-                     size="sm"
-                     onClick={onBackToHome}
-                     className="text-xs text-white/40 hover:text-white hover:bg-white/10 mt-2"
-                   >
-                     Manage Wallet
-                   </Button>
+                  <div className="flex justify-center space-x-2">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={onBackToHome}
+                      className="text-xs text-white/40 hover:text-white hover:bg-white/10"
+                    >
+                      Manage Wallets
+                    </Button>
+                    {isMounted && stellarWalletConnected && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={handleRefreshXLM}
+                        disabled={isStellarLoading}
+                        className="text-xs text-white/40 hover:text-white hover:bg-white/10"
+                      >
+                        {isStellarLoading ? "Refreshing..." : "Refresh XLM"}
+                      </Button>
+                    )}
+                    {isMounted && stellarWalletConnected && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={handleTestBalance}
+                        className="text-xs text-red-400 hover:text-red-300 hover:bg-red-500/10"
+                      >
+                        Test Balance
+                      </Button>
+                    )}
+                  </div>
                 </div>
               </>
             )}
@@ -765,28 +974,28 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
         )}
       </AnimatePresence>
 
-             {/* Order Details Modal */}
-       <OrderDetails
-         orderData={orderData}
-         isOpen={showOrderDetails}
-         onClose={() => {
-           setShowOrderDetails(false)
-           setOrderData(null)
-         }}
-         onConfirm={handleConfirmOrder}
-         isLoading={isCreatingOrder}
-       />
+      {/* Order Details Modal */}
+      <OrderDetails
+        orderData={orderData}
+        isOpen={showOrderDetails}
+        onClose={() => {
+          setShowOrderDetails(false)
+          setOrderData(null)
+        }}
+        onConfirm={handleConfirmOrder}
+        isLoading={isCreatingOrder}
+      />
 
-       {/* Loading Modal */}
-       <LoadingModal
-         isOpen={showLoadingModal}
-         step={loadingStep}
-         totalSteps={4}
-         message={loadingStep === 1 ? "Creating your order..." : 
-                 loadingStep === 2 ? "Preparing buyer approval..." : 
-                 loadingStep === 3 ? "Sending to relayer..." : 
-                 "Processing response..."}
-       />
-     </div>
-   )
-} 
+      {/* Loading Modal */}
+      <LoadingModal
+        isOpen={showLoadingModal}
+        step={loadingStep}
+        totalSteps={4}
+        message={loadingStep === 1 ? "Creating your order..." : 
+                loadingStep === 2 ? "Preparing buyer approval..." : 
+                loadingStep === 3 ? "Sending to relayer..." : 
+                "Processing response..."}
+      />
+    </div>
+  )
+}
