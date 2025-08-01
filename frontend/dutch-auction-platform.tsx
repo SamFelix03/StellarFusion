@@ -33,6 +33,7 @@ import Aurora from "./components/Aurora"
 
 interface OrderData {
   orderId: string
+  buyerAddress: string
   srcChainId: string
   dstChainId: string
   srcToken: string
@@ -41,6 +42,11 @@ interface OrderData {
   dstAmount: string
   status: string
   createdAt: string
+  hashedSecret?: string
+  market_price?: string
+  slippage?: string
+  orderType?: string
+  auctionType?: string
 }
 
 interface AuctionDetails {
@@ -60,6 +66,14 @@ interface AuctionDetails {
   toChain?: string
   tokenName?: string
   tokenSymbol?: string
+  
+  // Complete order data from database
+  srcChainId?: string
+  dstChainId?: string
+  srcToken?: string
+  dstToken?: string
+  srcAmount?: string
+  dstAmount?: string
   
   // Single auction properties
   currentPrice?: number
@@ -106,9 +120,35 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
         return null
       }
       const result = await response.json()
+      console.log('📊 Complete order data fetched from database:', result.data)
       return result.data
     } catch (error) {
       console.error(`❌ Error fetching order data for ${orderId}:`, error)
+      return null
+    }
+  }
+
+  // Fetch complete order details when resolver chooses an order
+  const fetchCompleteOrderDetails = async (orderId: string): Promise<OrderData | null> => {
+    try {
+      console.log('🔍 Fetching complete order details for resolver:', orderId)
+      const orderData = await fetchOrderData(orderId)
+      if (orderData) {
+        console.log('✅ Complete order details fetched:', {
+          orderId: orderData.orderId,
+          buyerAddress: orderData.buyerAddress,
+          srcChainId: orderData.srcChainId,
+          dstChainId: orderData.dstChainId,
+          srcToken: orderData.srcToken,
+          dstToken: orderData.dstToken,
+          srcAmount: orderData.srcAmount,
+          dstAmount: orderData.dstAmount,
+          hashedSecret: orderData.hashedSecret
+        })
+      }
+      return orderData
+    } catch (error) {
+      console.error('❌ Error fetching complete order details:', error)
       return null
     }
   }
@@ -136,6 +176,7 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
     // Set up event handlers
     client.onNewAuction((auction) => {
       console.log('🚀 New auction received in resolver:', auction)
+      console.log('📊 Buyer address in new auction:', auction.buyerAddress)
       setAuctions(prev => {
         console.log('📊 Previous auctions state:', prev)
         // Check if auction already exists
@@ -255,6 +296,7 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
 
   const handleAuctionClick = (auction: Auction) => {
     console.log('🔍 Auction clicked:', auction.orderId, 'Type:', auction.auctionType)
+    console.log('📊 Original auction buyer address:', auction.buyerAddress)
     
     // Determine token info based on order data
     const tokenInfo = getTokenInfo(auction)
@@ -264,11 +306,27 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
       tokenName: tokenInfo.tokenName,
       tokenSymbol: tokenInfo.tokenSymbol,
       fromChain: tokenInfo.fromChain,
-      toChain: tokenInfo.toChain
-      // buyerAddress comes from the relayer auction data
+      toChain: tokenInfo.toChain,
+      sourceAmount: parseFloat(tokenInfo.srcAmount) || 0,
+      // Ensure buyerAddress is properly included from the original auction data
+      buyerAddress: auction.buyerAddress || '',
+      // Include other auction properties
+      currentPrice: auction.auctionType === 'single' 
+        ? (auction as SingleAuction).currentPrice 
+        : (auction as SegmentedAuction).segments?.[0]?.currentPrice,
+      minimumPrice: auction.auctionType === 'single'
+        ? (auction as SingleAuction).minimumPrice
+        : (auction as SegmentedAuction).minimumPrice,
+      marketPrice: auction.auctionType === 'single'
+        ? (auction as SingleAuction).marketPrice
+        : (auction as SegmentedAuction).marketPrice,
+      slippage: auction.auctionType === 'single'
+        ? (auction as SingleAuction).slippage
+        : (auction as SegmentedAuction).slippage
     }
     
     console.log('📊 Auction details:', details)
+    console.log('📊 Buyer address:', details.buyerAddress)
     if (details.auctionType === 'segmented') {
       console.log('📊 Segments in details:', (details as SegmentedAuction).segments)
     }
@@ -395,7 +453,7 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
     setIsConfirmModalOpen(true)
   }
 
-  const handleConfirmResolution = () => {
+  const handleConfirmResolution = async () => {
     if (!pendingConfirmation || !auctionClientRef.current) return
 
     const userAddress = getCurrentUserAddress()
@@ -405,12 +463,30 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
     }
 
     try {
+      // Fetch complete order details from database
+      const completeOrderData = await fetchCompleteOrderDetails(pendingConfirmation.orderId)
+      if (!completeOrderData) {
+        throw new Error('Failed to fetch complete order details from database')
+      }
+
+      console.log('📊 Complete order data for resolver:', completeOrderData)
+
       if (pendingConfirmation.auctionType === 'single') {
         auctionClientRef.current.confirmAuction(pendingConfirmation.orderId, undefined, userAddress)
         console.log(`🏆 Confirming auction ${pendingConfirmation.orderId} as winner: ${userAddress}`)
         
-        // Open resolver execution modal for normal orders
-        setExecutingAuction(pendingConfirmation as AuctionDetails)
+        // Open resolver execution modal for normal orders with complete data
+        setExecutingAuction({
+          ...pendingConfirmation,
+          buyerAddress: completeOrderData.buyerAddress,
+          srcChainId: completeOrderData.srcChainId,
+          dstChainId: completeOrderData.dstChainId,
+          srcToken: completeOrderData.srcToken,
+          dstToken: completeOrderData.dstToken,
+          srcAmount: completeOrderData.srcAmount,
+          dstAmount: completeOrderData.dstAmount,
+          hashedSecret: completeOrderData.hashedSecret
+        } as AuctionDetails)
         setIsExecutionModalOpen(true)
       } else if (pendingConfirmation.auctionType === 'segmented') {
         if (!selectedSegmentId) {
@@ -420,8 +496,18 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
         auctionClientRef.current.confirmAuction(pendingConfirmation.orderId, selectedSegmentId, userAddress)
         console.log(`🏆 Confirming segment ${selectedSegmentId} of auction ${pendingConfirmation.orderId} as winner: ${userAddress}`)
         
-        // Open resolver execution modal for partial fill orders
-        setExecutingAuction(pendingConfirmation as AuctionDetails)
+        // Open resolver execution modal for partial fill orders with complete data
+        setExecutingAuction({
+          ...pendingConfirmation,
+          buyerAddress: completeOrderData.buyerAddress,
+          srcChainId: completeOrderData.srcChainId,
+          dstChainId: completeOrderData.dstChainId,
+          srcToken: completeOrderData.srcToken,
+          dstToken: completeOrderData.dstToken,
+          srcAmount: completeOrderData.srcAmount,
+          dstAmount: completeOrderData.dstAmount,
+          hashedSecret: completeOrderData.hashedSecret
+        } as AuctionDetails)
         setIsExecutionModalOpen(true)
       }
 
@@ -570,7 +656,7 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
               iconColor: "text-blue-600",
             },
             {
-              label: "Normal Auctions",
+              label: "Completed",
               value: auctions.filter((a) => a.auctionType === 'single').length,
               icon: Zap,
               iconColor: "text-amber-600",
@@ -841,7 +927,12 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
                       <ArrowLeftRight className="w-3 h-3" />
                       <span>{selectedAuction.toChain}</span>
                     </div>
-                    <p className="text-xs text-white/40 font-mono mt-1">{selectedAuction.orderId}</p>
+                    <p className="text-xs text-white/40 font-mono mt-1">
+                      {selectedAuction.orderId ? 
+                        `${selectedAuction.orderId.slice(0, 8)}...${selectedAuction.orderId.slice(-8)}` : 
+                        'N/A'
+                      }
+                    </p>
                   </div>
                 </div>
               </div>
@@ -997,7 +1088,7 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
                      {selectedSegmentId && (
                        <div className="mt-3 p-2 bg-purple-500/20 rounded-lg border border-purple-500/30">
                          <p className="text-xs text-purple-300 font-medium">
-                           ✅ Selected Segment {selectedSegmentId} - Click "Confirm as Winner" to resolve this segment
+                           ✅ Selected Segment {selectedSegmentId} - Click "Resolve" to resolve this segment
                          </p>
                        </div>
                      )}
@@ -1019,8 +1110,8 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
                      <motion.div className="flex items-center gap-2">
                        <CheckCircle className="w-4 h-4" />
                        {selectedAuction.auctionType === 'segmented' 
-                         ? `Confirm Segment ${selectedSegmentId}`
-                         : 'Confirm as Winner'
+                         ? `Resolve Segment ${selectedSegmentId}`
+                         : 'Resolve'
                        }
                        <ArrowRight className="w-4 h-4" />
                      </motion.div>
@@ -1041,26 +1132,26 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
            <div className="space-y-4">
              <p className="text-white/80">
                {pendingConfirmation?.auctionType === 'segmented' 
-                 ? `Are you sure you want to resolve segment ${selectedSegmentId} of auction ${pendingConfirmation?.orderId.slice(0, 8)}...?`
-                 : `Are you sure you want to resolve auction ${pendingConfirmation?.orderId.slice(0, 8)}...?`
+                 ? `Are you sure you want to resolve segment ${selectedSegmentId} of auction ${pendingConfirmation?.orderId ? `${pendingConfirmation.orderId.slice(0, 8)}...${pendingConfirmation.orderId.slice(-8)}` : 'N/A'}?`
+                 : `Are you sure you want to resolve auction ${pendingConfirmation?.orderId ? `${pendingConfirmation.orderId.slice(0, 8)}...${pendingConfirmation.orderId.slice(-8)}` : 'N/A'}?`
                }
              </p>
              <p className="text-sm text-white/60">
                {pendingConfirmation?.auctionType === 'segmented'
-                 ? `This will declare you as the winner of segment ${selectedSegmentId} and complete that segment.`
-                 : `This will declare you as the winner and complete the auction.`
+                 ? `This will declare you as the resolver of segment ${selectedSegmentId} and complete that segment.`
+                 : `This will declare you as the resolver and complete the auction.`
                }
              </p>
              <div className="flex gap-3 pt-4">
                <Button
                  variant="outline"
-                 className="flex-1 border-white/20 text-white/80 hover:bg-white/10"
+                 className="flex-1 border-white/20 text-black/80 hover:bg-white/10"
                  onClick={() => setIsConfirmModalOpen(false)}
                >
                  Cancel
                </Button>
                <Button
-                 className="flex-1 bg-white/10 hover:bg-white/20 text-white border border-white/10"
+                 className="flex-1 bg-white/10 text-white border border-white/10"
                  onClick={handleConfirmResolution}
                >
                  Confirm

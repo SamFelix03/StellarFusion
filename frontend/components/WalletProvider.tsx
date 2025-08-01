@@ -12,7 +12,7 @@ const config = createConfig({
   chains: [mainnet, sepolia],
   connectors: [
     metaMask(),
-    walletConnect({ projectId: "YOUR_PROJECT_ID" }),
+    walletConnect({ projectId: process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID || "YOUR_PROJECT_ID" }),
     coinbaseWallet({ appName: "StellarFusion" }),
   ],
   transports: {
@@ -66,6 +66,30 @@ function WalletContextProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     setIsMounted(true)
   }, [])
+
+  // Load saved wallet state from localStorage
+  useEffect(() => {
+    if (isMounted) {
+      const savedWallet = localStorage.getItem("stellarWallet")
+      if (savedWallet) {
+        try {
+          const parsedWallet = JSON.parse(savedWallet)
+          console.log("📱 Loading saved wallet state:", parsedWallet)
+          
+          // Defer state update to avoid hydration issues
+          const timer = setTimeout(() => {
+            setStellarWallet(parsedWallet)
+            balanceRef.current = parsedWallet.balance || '0'
+          }, 50)
+          
+          return () => clearTimeout(timer)
+        } catch (error) {
+          console.error("❌ Error loading saved wallet:", error)
+          localStorage.removeItem("stellarWallet")
+        }
+      }
+    }
+  }, [isMounted])
 
   const handleConnect = async () => {
     try {
@@ -147,6 +171,10 @@ function WalletContextProvider({ children }: { children: React.ReactNode }) {
       console.log("🔧 Setting Stellar wallet data:", walletData)
       console.log("🔧 Previous stellarWallet state:", stellarWallet)
       
+      // Save wallet data to localStorage
+      localStorage.setItem("stellarWallet", JSON.stringify(walletData))
+      console.log("💾 Wallet data saved to localStorage")
+      
       // Force state update with a callback to ensure it's applied
       setStellarWallet(prevState => {
         console.log("🔄 Previous state in setter:", prevState)
@@ -188,7 +216,8 @@ function WalletContextProvider({ children }: { children: React.ReactNode }) {
   const disconnectStellar = async () => {
     try {
       setStellarWallet(null)
-      console.log("✅ Stellar wallet disconnected")
+      localStorage.removeItem("stellarWallet")
+      console.log("✅ Stellar wallet disconnected and localStorage cleared")
     } catch (error) {
       console.error("Failed to disconnect Stellar wallet:", error)
     }
@@ -287,6 +316,35 @@ function WalletContextProvider({ children }: { children: React.ReactNode }) {
     const interval = setInterval(checkFreighterConnection, 5000)
     return () => clearInterval(interval)
   }, [stellarWallet])
+
+  // Auto-reconnect Freighter wallet on app reload
+  useEffect(() => {
+    const autoReconnectFreighter = async () => {
+      try {
+        console.log("🔄 Checking for existing Freighter connection...")
+        const connected = await isConnected()
+        
+        if (connected && !stellarWallet) {
+          console.log("✅ Freighter is connected, reconnecting wallet...")
+          await connectStellar()
+        } else if (!connected) {
+          console.log("❌ Freighter not connected, user needs to connect manually")
+        }
+      } catch (error) {
+        console.error("❌ Error during auto-reconnect:", error)
+      }
+    }
+
+    // Only attempt auto-reconnect after component is mounted and hydration is complete
+    if (isMounted) {
+      // Defer the auto-reconnect to avoid hydration issues
+      const timer = setTimeout(() => {
+        autoReconnectFreighter()
+      }, 100)
+      
+      return () => clearTimeout(timer)
+    }
+  }, [isMounted]) // Only run when mounted state changes
 
   // Monitor stellarWallet state changes
   useEffect(() => {

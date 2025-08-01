@@ -176,16 +176,13 @@ export default function LandingPage({
 
             <h1 className="text-6xl md:text-8xl font-bold mb-8 leading-tight">
               <span className="bg-gradient-to-r from-white via-gray-200 to-white bg-clip-text text-transparent">
-                Stellar Fusion
+                StellarFusion
               </span>
               <br />
-              <span className="bg-gradient-to-r from-gray-400 via-white to-gray-400 bg-clip-text text-transparent">
-                Swaps
-              </span>
             </h1>
 
             <p className="text-xl md:text-2xl text-white/70 mb-12 max-w-3xl mx-auto leading-relaxed">
-              Experience gasless atomic swaps between ethereum and stellar
+              {"A Fusion+ Swap Implementation for EVM <> Stellar"}
             </p>
 
             <div className="flex flex-col sm:flex-row gap-6 justify-center items-center">
@@ -219,7 +216,7 @@ export default function LandingPage({
                   onClick={onEnterResolver}
                 >
                   <Users className="w-5 h-5 mr-2" />
-                  Resolver
+                  Resolve
                   <ArrowRight className="w-5 h-5 ml-2" />
                 </Button>
               </motion.div>
