@@ -1,107 +1,6 @@
 import { ethers } from 'ethers';
-
-// Merkle Tree implementation for partial fills
-export class PartialFillOrderManager {
-  private secrets: string[];
-  private secretHashes: string[];
-  private leaves: string[];
-  private merkleTree: string[][];
-  private root: string = '';
-
-  constructor(partsCount: number) {
-    this.secrets = [];
-    this.secretHashes = [];
-    this.leaves = [];
-    this.merkleTree = [];
-    
-    // Generate secrets for each part
-    for (let i = 0; i < partsCount; i++) {
-      const secretBytes = ethers.utils.randomBytes(32);
-      const secret = ethers.utils.hexlify(secretBytes);
-      const secretHash = ethers.utils.sha256(secretBytes);
-      
-      this.secrets.push(secret);
-      this.secretHashes.push(secretHash);
-      this.leaves.push(secretHash);
-    }
-    
-    // Build Merkle tree
-    this.buildMerkleTree();
-  }
-
-  private buildMerkleTree() {
-    // Start with leaves
-    this.merkleTree = [this.leaves];
-    
-    // Build tree levels
-    let currentLevel = this.leaves;
-    while (currentLevel.length > 1) {
-      const nextLevel: string[] = [];
-      
-      for (let i = 0; i < currentLevel.length; i += 2) {
-        const left = currentLevel[i];
-        const right = i + 1 < currentLevel.length ? currentLevel[i + 1] : left;
-        
-        const combined = ethers.utils.solidityPack(['bytes32', 'bytes32'], [left, right]);
-        const hash = ethers.utils.keccak256(combined);
-        nextLevel.push(hash);
-      }
-      
-      this.merkleTree.push(nextLevel);
-      currentLevel = nextLevel;
-    }
-    
-    // Root is the last element of the last level
-    this.root = currentLevel[0];
-  }
-
-  getSecret(index: number): string {
-    return this.secrets[index];
-  }
-
-  getSecretHash(index: number): string {
-    return this.secretHashes[index];
-  }
-
-  getLeaf(index: number): string {
-    return this.leaves[index];
-  }
-
-  getProof(index: number): string[] {
-    const proof: string[] = [];
-    let currentIndex = index;
-    
-    for (let level = 0; level < this.merkleTree.length - 1; level++) {
-      const currentLevel = this.merkleTree[level];
-      const isRightNode = currentIndex % 2 === 1;
-      const siblingIndex = isRightNode ? currentIndex - 1 : currentIndex + 1;
-      
-      if (siblingIndex < currentLevel.length) {
-        proof.push(currentLevel[siblingIndex]);
-      }
-      
-      currentIndex = Math.floor(currentIndex / 2);
-    }
-    
-    return proof;
-  }
-
-  getHashLock(): string {
-    return this.root;
-  }
-
-  getPartsCount(): number {
-    return this.secrets.length;
-  }
-
-  getAllSecrets(): string[] {
-    return [...this.secrets];
-  }
-
-  getAllSecretHashes(): string[] {
-    return [...this.secretHashes];
-  }
-}
+import { HashLock, PartialFillOrderManager } from './hash-lock';
+import { chainsConfig } from '@/constants/chains';
 
 // Order creation interface
 export interface OrderCreationParams {
@@ -141,59 +40,6 @@ export interface OrderData {
   partialFillSecretHashes?: string[];
 }
 
-// Add chain configuration for frontend
-const CHAIN_CONFIGS = {
-  'ethereum': {
-    name: 'Sepolia Testnet',
-    chainId: 11155111,
-    factoryAddress: '0x4F25B17649F0A056138E251487c27A22D793DBA7',
-    lopAddress: '0x13F4118A0C9AA013eeB078f03318aeea84469cDD',
-    tokens: {
-      'sepolia-eth': {
-        name: 'Ethereum',
-        symbol: 'ETH',
-        address: '0x0000000000000000000000000000000000000000',
-        decimals: 18,
-        isNative: true
-      },
-      'eth': {
-        name: 'Ethereum',
-        symbol: 'ETH',
-        address: '0x0000000000000000000000000000000000000000',
-        decimals: 18,
-        isNative: true
-      },
-      'WETH': {
-        name: 'Wrapped Ethereum',
-        symbol: 'WETH',
-        address: '0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9',
-        decimals: 18,
-        isNative: false
-      }
-    }
-  }
-};
-
-// Chain configuration mapping
-const CHAIN_IDS: { [key: string]: number | string } = {
-  'Ethereum': 'ethereum',
-  'Sepolia': 'sepolia',
-  'BSC': 'bsc',
-  'BSC Testnet': 'bsc-testnet',
-  'stellar-testnet': 'stellar-testnet',
-  'stellar-mainnet': 'stellar-mainnet'
-};
-
-// Token address mapping
-const TOKEN_ADDRESSES: { [key: string]: string } = {
-  'ETH': 'ethereum',
-  'Sepolia ETH': 'sepolia-eth',
-  'WETH': 'weth',
-  'USDC': 'usdc',
-  'USDT': 'usdt',
-  'XLM': 'XLM'
-};
-
 export function createOrder(params: OrderCreationParams): OrderData {
   console.log('🔧 ========================================');
   console.log('🔧 ORDER CREATION PROCESS STARTED');
@@ -212,16 +58,16 @@ export function createOrder(params: OrderCreationParams): OrderData {
     // Create partial fill manager with merkle tree
     partialFillManager = new PartialFillOrderManager(params.partsCount);
     hashedSecret = partialFillManager.getHashLock();
-    // For partial fills, we don't need a main secret - only the partial fill secrets
-    secret = ''; // No main secret for partial fills
+    // Use first secret as the main order secret (for backwards compatibility) - matching backend
+    secret = partialFillManager.getSecret(0);
     
     // Store all secrets and hashes for UI display
     partialFillSecrets = partialFillManager.getAllSecrets();
     partialFillSecretHashes = partialFillManager.getAllSecretHashes();
     
-    console.log(`📋 Generated ${params.partsCount} secrets for partial fill`);
+    console.log(`📋 Generated ${params.partsCount + 1} secrets for partial fill (including extra)`);
     console.log(`🔐 HashLock (Merkle Root): ${hashedSecret}`);
-    console.log(`🔑 No main secret for partial fills - only ${params.partsCount} partial fill secrets`);
+    console.log(`🔑 Main secret (first secret): ${secret.slice(0, 10)}...`);
   } else {
     console.log('🔐 Creating single fill order');
     
@@ -255,13 +101,13 @@ export function createOrder(params: OrderCreationParams): OrderData {
 
   console.log(`🆔 Generated order ID: ${orderId}`);
 
-  // Get chain IDs
-  const srcChainId = CHAIN_IDS[params.sourceChain] || params.sourceChain;
-  const dstChainId = CHAIN_IDS[params.destinationChain] || params.destinationChain;
+  // Get chain IDs directly from chainsConfig
+  const srcChainId = params.sourceChain;
+  const dstChainId = params.destinationChain;
 
-  // Get token addresses
-  const srcToken = TOKEN_ADDRESSES[params.sourceToken] || params.sourceToken;
-  const dstToken = TOKEN_ADDRESSES[params.destinationToken] || params.destinationToken;
+  // Get token symbols directly (no mapping needed)
+  const srcToken = params.sourceToken;
+  const dstToken = params.destinationToken;
 
   console.log(`🔗 Chain and token mapping:`);
   console.log(`   Source: ${params.sourceChain} -> ${srcChainId} -> ${params.sourceToken} -> ${srcToken}`);
@@ -320,10 +166,10 @@ export function createOrder(params: OrderCreationParams): OrderData {
   
   if (orderData.isPartialFillEnabled && orderData.partialFillSecrets) {
     console.log('🌳 Partial fill details:');
-    console.log(`   Total parts: ${orderData.partialFillSecrets.length}`);
+    console.log(`   Total secrets: ${orderData.partialFillSecrets.length} (${orderData.partialFillSecrets.length - 1} parts + 1 extra)`);
     console.log(`   Merkle root: ${orderData.hashedSecret}`);
     orderData.partialFillSecrets.forEach((secret, index) => {
-      console.log(`   Part ${index + 1}: ${secret.slice(0, 10)}...`);
+      console.log(`   Secret ${index + 1}: ${secret.slice(0, 10)}...`);
     });
   }
   
@@ -344,22 +190,36 @@ export async function prepareBuyer(
 ): Promise<void> {
   console.log('🔐 Preparing buyer approval...');
   
-  const chainConfig = CHAIN_CONFIGS[sourceChain as keyof typeof CHAIN_CONFIGS];
-  if (!chainConfig) {
-    throw new Error(`Chain configuration not found for ${sourceChain}`);
+  // Map the chain name to the correct chain key in chainsConfig
+  let chainKey: string;
+  if (sourceChain === "Sepolia Testnet") {
+    chainKey = "sepolia";
+  } else if (sourceChain === "Stellar Testnet") {
+    chainKey = "stellar-testnet";
+  } else {
+    chainKey = sourceChain.toLowerCase();
   }
   
-  const tokenConfig = chainConfig.tokens[sourceToken as keyof typeof chainConfig.tokens];
+  const chainConfig = chainsConfig[chainKey as keyof typeof chainsConfig];
+  
+  if (!chainConfig) {
+    throw new Error(`Chain configuration not found for ${sourceChain} (key: ${chainKey})`);
+  }
+  
+  // Use the token symbol directly from chainsConfig
+  const tokenKey = sourceToken;
+  const tokenConfig = chainConfig.tokens[tokenKey as keyof typeof chainConfig.tokens];
+  
   if (!tokenConfig) {
-    throw new Error(`Token configuration not found for ${sourceToken}`);
+    throw new Error(`Token configuration not found for ${sourceToken} (key: ${tokenKey}) in chain ${chainKey}. Available tokens: ${Object.keys(chainConfig.tokens).join(', ')}`);
   }
   
   const factoryAddress = chainConfig.factoryAddress;
   const amountInWei = ethers.utils.parseUnits(sourceAmount, tokenConfig.decimals);
   
   console.log(`📋 Approval Details:`);
-  console.log(`   Chain: ${sourceChain}`);
-  console.log(`   Token: ${sourceToken} (${tokenConfig.address})`);
+  console.log(`   Chain: ${sourceChain} -> ${chainKey}`);
+  console.log(`   Token: ${sourceToken} -> ${tokenKey} (${tokenConfig.address})`);
   console.log(`   Amount: ${sourceAmount} (${amountInWei.toString()} wei)`);
   console.log(`   Factory: ${factoryAddress}`);
   console.log(`   Is Native: ${tokenConfig.isNative}`);
@@ -535,14 +395,13 @@ export async function sendOrderToRelayer(orderData: OrderData, isPartialFill: bo
   if (isPartialFill && orderData.partialFillSecrets && orderData.partialFillSecretHashes) {
     const segmentSecrets = orderData.partialFillSecrets.map((secret, index) => ({
       segmentId: index + 1,
-      secret: secret,
       hashedSecret: orderData.partialFillSecretHashes![index]
     }));
     
     requestBody.segmentSecrets = segmentSecrets;
-    console.log('🔐 Including segment secrets for partial fill order:');
+    console.log('🔐 Including segment hashes for partial fill order (secrets kept private):');
     segmentSecrets.forEach((segment, index) => {
-      console.log(`   Segment ${index + 1}: Secret: ${segment.secret.slice(0, 10)}..., Hash: ${segment.hashedSecret.slice(0, 10)}...`);
+      console.log(`   Segment ${index + 1}: Hash: ${segment.hashedSecret.slice(0, 10)}...`);
     });
   }
 
@@ -639,5 +498,108 @@ export async function fetchHashedSecretFromDatabase(orderId: string): Promise<st
   } catch (error) {
     console.error('❌ Error fetching hashedSecret from database:', error);
     return null;
+  }
+}
+
+/**
+ * Share secrets with the relayer for order execution
+ * This is called AFTER order creation to provide the relayer with the actual secrets
+ */
+export async function shareSecretsWithRelayer(orderData: OrderData): Promise<any> {
+  console.log('🔐 ========================================');
+  console.log('🔐 SHARING SECRETS WITH RELAYER');
+  console.log('🔐 ========================================');
+  console.log('📋 Order ID:', orderData.orderId);
+  console.log('📋 Is Partial Fill:', orderData.isPartialFillEnabled);
+  
+  // Only handle single fill orders - partial fills use shareSegmentSecret
+  if (orderData.isPartialFillEnabled) {
+    throw new Error('Partial fill orders should use shareSegmentSecret() instead of shareSecretsWithRelayer()');
+  }
+  
+  try {
+    // For single fill orders, send the main secret
+    console.log('🔑 Sharing single fill secret...');
+    
+    const response = await fetch(`http://localhost:8000/orders/${orderData.orderId}/secret`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ 
+        secret: orderData.secret,
+        hashedSecret: orderData.hashedSecret 
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const result = await response.json();
+    console.log('✅ Main secret shared successfully');
+    console.log('📋 Response:', JSON.stringify(result, null, 2));
+    return result;
+    
+  } catch (error) {
+    console.error('❌ Error sharing secrets with relayer:', error);
+    throw new Error(`Failed to share secrets: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+}
+
+/**
+ * Share a specific segment secret with the relayer when requested by resolver
+ * This is called when a resolver wins a specific segment and needs the secret
+ */
+export async function shareSegmentSecret(orderId: string, segmentId: number, orderData: OrderData): Promise<any> {
+  console.log('🔐 ========================================');
+  console.log('🔐 SHARING SPECIFIC SEGMENT SECRET');
+  console.log('🔐 ========================================');
+  console.log('📋 Order ID:', orderId);
+  console.log('📋 Segment ID:', segmentId);
+  
+  if (!orderData.isPartialFillEnabled || !orderData.partialFillSecrets || !orderData.partialFillSecretHashes) {
+    throw new Error('Order is not a partial fill order or missing segment data');
+  }
+  
+  // Validate segment ID
+  if (segmentId < 1 || segmentId > orderData.partialFillSecrets.length) {
+    throw new Error(`Invalid segment ID: ${segmentId}. Must be between 1 and ${orderData.partialFillSecrets.length}`);
+  }
+  
+  // Get the specific segment secret (segmentId is 1-based, array is 0-based)
+  const secretIndex = segmentId - 1;
+  const secret = orderData.partialFillSecrets[secretIndex];
+  const hashedSecret = orderData.partialFillSecretHashes![secretIndex];
+  
+  console.log(`🔐 Sharing secret for segment ${segmentId}:`);
+  console.log(`   Secret: ${secret.slice(0, 10)}...`);
+  console.log(`   Hash: ${hashedSecret.slice(0, 10)}...`);
+  
+  try {
+    const response = await fetch(`http://localhost:8000/orders/${orderId}/segment-secret`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ 
+        segmentId: segmentId,
+        secret: secret,
+        hashedSecret: hashedSecret
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const result = await response.json();
+    console.log('✅ Segment secret shared successfully');
+    console.log('📋 Response:', JSON.stringify(result, null, 2));
+    return result;
+    
+  } catch (error) {
+    console.error('❌ Error sharing segment secret:', error);
+    throw new Error(`Failed to share segment secret: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 } 

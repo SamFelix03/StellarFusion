@@ -2,10 +2,11 @@ import { ethers } from 'ethers'
 import { toast } from '@/hooks/use-toast'
 import { chainsConfig } from '@/constants/chains'
 import { fetchHashedSecretFromDatabase } from './order-utils'
+import { GasValuesOverflowError } from 'viem/account-abstraction'
 
 // Contract ABIs for source escrow creation
 const lopABI = [
-  "function fillOrder(bytes32 orderId, address maker, address recipient, uint256 tokenAmount, bytes32 hashedSecret, uint256 withdrawalStart, uint256 publicWithdrawalStart, uint256 cancellationStart, uint256 publicCancellationStart, uint256 partIndex, uint256 totalParts) external payable returns (address)",
+  "function fillOrder(bytes32 orderId, address maker, address recipient, uint256 tokenAmount, bytes32 hashedSecret, uint256 withdrawalStart, uint256 publicWithdrawalStart, uint256 cancellationStart, uint256 publicCancellationStart, uint256 partIndex, uint16 totalParts) external payable returns (address)",
   "event SrcEscrowCreated(address escrowAddress, address maker, address recipient, bytes32 hashedSecret, uint256 amount, uint256 withdrawalStart, uint256 publicWithdrawalStart, uint256 cancellationStart, uint256 publicCancellationStart)"
 ]
 
@@ -266,9 +267,9 @@ export class ResolverContractManager {
       // Convert amount to BigNumber
       const srcAmount = ethers.utils.parseEther(params.srcAmount)
       
-      // Set partIndex and totalParts based on order type
-      const partIndex = params.isPartialFill ? (params.segmentIndex || 0) : 0
-      const totalParts = params.isPartialFill ? (params.totalParts || 1) : 1
+      // Set partIndex and totalParts based on order type - match working code exactly
+      const partIndex = params.isPartialFill ? (params.segmentIndex || 0) : 0  // 0 for single fill
+      const totalParts = params.isPartialFill ? (params.totalParts || 4) : 1   // 1 for single fill, 4 for partial fill
       
       console.log('🔐 ========================================');
       console.log('🔐 CONTRACT CALL - CREATE SOURCE ESCROW (EVM)');
@@ -302,6 +303,7 @@ export class ResolverContractManager {
       console.log('   partIndex type:', typeof partIndex);
       console.log('   totalParts:', totalParts);
       console.log('   totalParts type:', typeof totalParts);
+      console.log('   isPartialFill:', params.isPartialFill);
       console.log('   value:', ethers.utils.parseEther("0.001").toString());
       console.log('   value type:', typeof ethers.utils.parseEther("0.001"));
       console.log('🔐 ========================================');
@@ -348,7 +350,7 @@ export class ResolverContractManager {
         totalParts,
         {
           value: ethers.utils.parseEther("0.001"),
-          gasLimit: 2000000
+          gasLimit: 3000000
         }
       )
 
@@ -522,7 +524,7 @@ export class ResolverContractManager {
         parts,
         { 
           value: ethers.utils.parseEther("0.001"),
-          gasLimit: 2000000
+          gasLimit: 3000000
         }
       )
       
