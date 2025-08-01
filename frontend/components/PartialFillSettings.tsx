@@ -100,7 +100,6 @@ export default function PartialFillSettings({
                 className="w-20 bg-black/30 border-white/10 text-white text-center"
                 disabled={!enablePartialFills}
               />
-              <span className="text-xs text-white/40">(2-8)</span>
             </div>
           </div>
 

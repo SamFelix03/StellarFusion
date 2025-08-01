@@ -553,7 +553,7 @@ export default function OrderProgressModal({
             <Button
               variant="outline"
               onClick={onClose}
-              className="border-white/20 text-white hover:bg-white/10"
+              className="border-white/20 text-black"
             >
               Close
             </Button>
@@ -561,7 +561,7 @@ export default function OrderProgressModal({
               <Button
                 variant="outline"
                 onClick={() => copyToClipboard(orderData.orderId)}
-                className="border-white/20 text-white hover:bg-white/10"
+                className="border-white/20 text-black"
               >
                 <Copy className="w-4 h-4 mr-2" />
                 Copy Order ID

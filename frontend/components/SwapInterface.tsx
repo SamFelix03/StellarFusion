@@ -427,6 +427,10 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
         partsCount: enablePartialFills ? partsCount : undefined
       })
 
+      console.log('📊 Order creation - buyer address:', address || stellarWallet?.publicKey || "")
+      console.log('📊 Order creation - address:', address)
+      console.log('📊 Order creation - stellarWallet?.publicKey:', stellarWallet?.publicKey)
+      console.log('📊 Order creation - final buyerAddress:', orderData.buyerAddress)
       setOrderData(orderData)
       setShowOrderDetails(true)
       setShowLoadingModal(false)

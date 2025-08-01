@@ -13,6 +13,8 @@ export interface SingleAuction {
   orderId: string
   orderType: 'normal'
   auctionType: 'single'
+  hashedSecret: string // Include hashedSecret for resolver
+  buyerAddress: string // Include buyerAddress for resolver
   currentPrice: number
   startPrice: number
   endPrice: number
@@ -20,7 +22,6 @@ export interface SingleAuction {
   sourceAmount: number
   marketPrice: number
   slippage: number
-  hashedSecret: string // Include hashedSecret for resolver
   winner: string | null
   status: 'active' | 'completed' | 'expired'
   endTime: number | null
@@ -31,6 +32,7 @@ export interface SegmentedAuction {
   orderType: 'partialfill'
   auctionType: 'segmented'
   hashedSecret: string // Include hashedSecret for resolver
+  buyerAddress: string // Include buyerAddress for resolver
   segments: AuctionSegment[]
   totalWinners: any[]
   marketPrice: number
@@ -54,6 +56,11 @@ export interface AuctionClient {
   onSegmentUpdate(callback: (orderId: string, segmentId: number, segment: AuctionSegment) => void): void
   onSegmentEnd(callback: (orderId: string, segmentId: number, status: string, winner?: string) => void): void
   onActiveAuctionsReceived(callback: (auctions: any[]) => void): void
+  // New resolver progress event handlers
+  onResolverProgress(callback: (orderId: string, step: string, details: any, segmentId?: number) => void): void
+  onEscrowCreated(callback: (orderId: string, escrowType: string, escrowAddress: string, transactionHash: string, segmentId?: number) => void): void
+  onWithdrawalCompleted(callback: (orderId: string, withdrawalType: string, transactionHash: string, segmentId?: number) => void): void
+  onOrderCompleted(callback: (orderId: string, segmentId?: number) => void): void
 }
 
 class DutchAuctionClient implements AuctionClient {
@@ -68,6 +75,11 @@ class DutchAuctionClient implements AuctionClient {
   private segmentUpdateCallbacks: ((orderId: string, segmentId: number, segment: AuctionSegment) => void)[] = []
   private segmentEndCallbacks: ((orderId: string, segmentId: number, status: string, winner?: string) => void)[] = []
   private activeAuctionsCallbacks: ((auctions: any[]) => void)[] = []
+  // New resolver progress event callbacks
+  private resolverProgressCallbacks: ((orderId: string, step: string, details: any, segmentId?: number) => void)[] = []
+  private escrowCreatedCallbacks: ((orderId: string, escrowType: string, escrowAddress: string, transactionHash: string, segmentId?: number) => void)[] = []
+  private withdrawalCompletedCallbacks: ((orderId: string, withdrawalType: string, transactionHash: string, segmentId?: number) => void)[] = []
+  private orderCompletedCallbacks: ((orderId: string, segmentId?: number) => void)[] = []
 
   constructor(clientName: string = 'frontend-client') {
     this.clientName = clientName
@@ -215,6 +227,7 @@ class DutchAuctionClient implements AuctionClient {
             marketPrice: data.marketPrice,
             slippage: data.slippage,
             hashedSecret: data.hashedSecret, // Include hashedSecret for resolver
+            buyerAddress: data.buyerAddress, // Include buyerAddress for resolver
             winner: null,
             status: 'active',
             endTime: null
@@ -234,6 +247,7 @@ class DutchAuctionClient implements AuctionClient {
              auctionType: 'segmented',
              hashedSecret: data.hashedSecret || '', // Include hashedSecret for resolver
              segments: data.segments || [],
+             buyerAddress: data.buyerAddress, // Include buyerAddress for resolver
              totalWinners: [],
              marketPrice: data.marketPrice,
              sourceAmount: data.sourceAmount,
@@ -261,6 +275,7 @@ class DutchAuctionClient implements AuctionClient {
             marketPrice: data.marketPrice,
             slippage: data.slippage || 0.02,
             hashedSecret: data.hashedSecret || '', // Include hashedSecret for resolver
+            buyerAddress: data.buyerAddress, // Include buyerAddress for resolver
             winner: null,
             status: 'active',
             endTime: null
@@ -316,6 +331,49 @@ class DutchAuctionClient implements AuctionClient {
         })
         break
 
+      // New resolver progress events
+      case 'resolver_progress':
+        console.log('🔧 Resolver progress:', data.orderId, 'Step:', data.step, 'Segment:', data.segmentId)
+        this.resolverProgressCallbacks.forEach(callback => {
+          callback(data.orderId, data.step, data.details, data.segmentId)
+        })
+        break
+
+      case 'source_escrow_created':
+      case 'destination_escrow_created':
+        console.log('🏗️ Escrow created:', data.orderId, 'Type:', data.type.replace('_escrow_created', ''), 'Address:', data.escrowAddress)
+        this.escrowCreatedCallbacks.forEach(callback => {
+          const escrowType = data.type.replace('_escrow_created', '')
+          callback(data.orderId, escrowType, data.escrowAddress, data.transactionHash, data.segmentId)
+        })
+        break
+
+      case 'source_withdrawal_completed':
+      case 'destination_withdrawal_completed':
+        console.log('💰 Withdrawal completed:', data.orderId, 'Type:', data.type.replace('_withdrawal_completed', ''), 'Hash:', data.transactionHash)
+        this.withdrawalCompletedCallbacks.forEach(callback => {
+          const withdrawalType = data.type.replace('_withdrawal_completed', '')
+          callback(data.orderId, withdrawalType, data.transactionHash, data.segmentId)
+        })
+        break
+
+      case 'order_completed':
+      case 'segment_completed':
+        console.log('✅ Order/Segment completed:', data.orderId, 'Segment:', data.segmentId)
+        this.orderCompletedCallbacks.forEach(callback => {
+          callback(data.orderId, data.segmentId)
+        })
+        break
+
+      case 'secret_requested':
+      case 'segment_secret_requested':
+        console.log('🔑 Secret requested:', data.orderId, 'Segment:', data.segmentId)
+        this.resolverProgressCallbacks.forEach(callback => {
+          const step = data.type === 'segment_secret_requested' ? 'segment_secret_requested' : 'secret_requested'
+          callback(data.orderId, step, {}, data.segmentId)
+        })
+        break
+
       case 'error':
         console.error('❌ Auction server error:', data.message)
         break
@@ -347,6 +405,23 @@ class DutchAuctionClient implements AuctionClient {
 
   onActiveAuctionsReceived(callback: (auctions: any[]) => void): void {
     this.activeAuctionsCallbacks.push(callback)
+  }
+
+  // New resolver progress event handlers
+  onResolverProgress(callback: (orderId: string, step: string, details: any, segmentId?: number) => void): void {
+    this.resolverProgressCallbacks.push(callback)
+  }
+
+  onEscrowCreated(callback: (orderId: string, escrowType: string, escrowAddress: string, transactionHash: string, segmentId?: number) => void): void {
+    this.escrowCreatedCallbacks.push(callback)
+  }
+
+  onWithdrawalCompleted(callback: (orderId: string, withdrawalType: string, transactionHash: string, segmentId?: number) => void): void {
+    this.withdrawalCompletedCallbacks.push(callback)
+  }
+
+  onOrderCompleted(callback: (orderId: string, segmentId?: number) => void): void {
+    this.orderCompletedCallbacks.push(callback)
   }
 }
 

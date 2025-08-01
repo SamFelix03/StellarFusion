@@ -73,7 +73,7 @@ export default function ResolverExecutionModal({
       {
         id: 'resolver-execution',
         title: 'Resolver Execution',
-        description: 'Executing complete resolver workflow with real transactions',
+        description: `Executing complete resolver workflow for order ${auction?.orderId || 'N/A'} - ${auction?.fromChain || 'Source'} to ${auction?.toChain || 'Destination'} swap`,
         status: 'pending',
         icon: <Zap className="w-5 h-5" />
       }
@@ -117,6 +117,9 @@ export default function ResolverExecutionModal({
   // Execute complete resolver workflow using the new integrated flow
   const executeResolverWorkflow = async () => {
     if (!auction) return
+
+    console.log('🔍 ResolverExecutionModal - auction data:', auction)
+    console.log('🔍 ResolverExecutionModal - buyer address:', auction.buyerAddress)
 
     setIsExecuting(true)
     updateStepStatus('resolver-execution', 'in-progress')
@@ -164,17 +167,18 @@ export default function ResolverExecutionModal({
         stellarSecretKey = stellarWallet.publicKey
       }
       
+      // Use complete order data from database
       const orderExecution: ResolverOrderExecution = {
         orderId: auction.orderId,
         sourceChain,
         destinationChain,
-        sourceToken: auction.tokenSymbol || 'ETH',
-        destinationToken: auction.tokenName || 'XLM',
-        sourceAmount: auction.sourceAmount?.toString() || '0',
-        destinationAmount: auction.currentPrice?.toString() || '0',
-        buyerAddress: auction.buyerAddress || '',
+        sourceToken: auction.srcToken || auction.tokenSymbol || 'ETH',
+        destinationToken: auction.dstToken || auction.tokenName || 'XLM',
+        sourceAmount: auction.srcAmount?.toString() || auction.sourceAmount?.toString() || '0',
+        destinationAmount: auction.dstAmount?.toString() || auction.currentPrice?.toString() || '0',
+        buyerAddress: auction.buyerAddress,
         resolverAddress,
-        hashedSecret: generateMockHashedSecret(),
+        hashedSecret: auction.hashedSecret || generateMockHashedSecret(),
         isPartialFill: auction.auctionType === 'segmented',
         segmentIndex: 0,
         totalParts: auction.auctionType === 'segmented' ? (auction.segments?.length || 1) : 1,
@@ -315,7 +319,7 @@ export default function ResolverExecutionModal({
             <div className="w-8 h-8 rounded-full bg-yellow-500/20 border border-yellow-500/30 flex items-center justify-center">
               <Trophy className="w-5 h-5 text-yellow-400" />
             </div>
-            <span>Winner Declaration</span>
+            <span>Resolver Execution</span>
             <Sparkles className="w-5 h-5 text-yellow-400" />
           </DialogTitle>
         </DialogHeader>
@@ -334,17 +338,47 @@ export default function ResolverExecutionModal({
               </div>
               <div className="bg-black/20 rounded-lg p-3">
                 <span className="text-white/60 text-xs uppercase tracking-wide">Auction Type</span>
-                <div className="font-medium text-white text-sm mt-1">{auction?.auctionType || 'N/A'}</div>
+                <div className="font-medium text-white text-sm mt-1">
+                  {auction?.auctionType === 'single' ? 'NORMAL' : 'PARTIAL FILL'}
+                </div>
+              </div>
+              <div className="bg-black/20 rounded-lg p-3">
+                <span className="text-white/60 text-xs uppercase tracking-wide">Source Chain</span>
+                <div className="font-medium text-white text-sm mt-1">{auction?.srcChainId || auction?.fromChain || 'N/A'}</div>
+              </div>
+              <div className="bg-black/20 rounded-lg p-3">
+                <span className="text-white/60 text-xs uppercase tracking-wide">Destination Chain</span>
+                <div className="font-medium text-white text-sm mt-1">{auction?.dstChainId || auction?.toChain || 'N/A'}</div>
+              </div>
+              <div className="bg-black/20 rounded-lg p-3">
+                <span className="text-white/60 text-xs uppercase tracking-wide">Source Amount</span>
+                <div className="font-medium text-white text-sm mt-1">
+                  {auction?.srcAmount || auction?.sourceAmount || '0'} {auction?.srcToken || auction?.tokenSymbol || 'TOKEN'}
+                </div>
+              </div>
+              <div className="bg-black/20 rounded-lg p-3">
+                <span className="text-white/60 text-xs uppercase tracking-wide">Destination Amount</span>
+                <div className="font-medium text-white text-sm mt-1">
+                  {auction?.dstAmount || auction?.currentPrice || '0'} {auction?.dstToken || auction?.tokenSymbol || 'TOKEN'}
+                </div>
+              </div>
+              <div className="bg-black/20 rounded-lg p-3">
+                <span className="text-white/60 text-xs uppercase tracking-wide">Buyer Address</span>
+                <div className="font-mono text-white text-sm mt-1">
+                  {auction?.buyerAddress && auction.buyerAddress !== '0x0000000000000000000000000000000000000000' ? 
+                    (auction.buyerAddress.length > 20 ? 
+                      `${auction.buyerAddress.slice(0, 8)}...${auction.buyerAddress.slice(-6)}` : 
+                      auction.buyerAddress
+                    ) : 
+                    'N/A'
+                  }
+                </div>
               </div>
               <div className="bg-black/20 rounded-lg p-3">
                 <span className="text-white/60 text-xs uppercase tracking-wide">Winner Address</span>
                 <div className="font-mono text-white text-sm mt-1">
                   {formatAddress(getWalletAddress(address ? { address } : stellarWallet))}
                 </div>
-              </div>
-              <div className="bg-black/20 rounded-lg p-3">
-                <span className="text-white/60 text-xs uppercase tracking-wide">Final Price</span>
-                <div className="font-medium text-white text-sm mt-1">{auction?.currentPrice || auction?.finalPrice || 'N/A'}</div>
               </div>
             </div>
           </div>
@@ -373,9 +407,9 @@ export default function ResolverExecutionModal({
                       {step.description}
                     </p>
                     {step.details && (
-                      <div className="mt-3 p-3 bg-black/20 rounded-lg">
-                        <div className="text-xs text-white/60 mb-2">Details:</div>
-                        <div className="text-xs text-white/80 font-mono">
+                      <div className="mt-3 p-3 bg-black/20 rounded-lg border border-white/10">
+                        <div className="text-xs text-white/60 mb-2">Transaction Details:</div>
+                        <div className="text-xs text-white/80 font-mono space-y-1">
                           {Object.entries(step.details).map(([key, value]) => (
                             <div key={key} className="flex justify-between">
                               <span className="text-white/60">{key}:</span>
@@ -403,14 +437,14 @@ export default function ResolverExecutionModal({
               variant="outline"
               onClick={onClose}
               disabled={isExecuting}
-              className="border-white/20 text-white hover:bg-white/10"
+              className="border-white/20 text-black"
             >
               Close
             </Button>
             {executionSteps.find(step => step.id === 'resolver-execution')?.status === 'completed' && (
               <Button
                 onClick={onExecutionComplete}
-                className="bg-green-600 hover:bg-green-700 text-white"
+                className="bg-green-500/20 hover:bg-green-500/30 text-green-300 border border-green-500/30"
               >
                 <CheckCircle className="w-4 h-4 mr-2" />
                 Complete
