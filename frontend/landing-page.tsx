@@ -171,7 +171,7 @@ export default function LandingPage({
           >
             <Badge className="bg-white/10 text-white border-white/20 backdrop-blur-xl mb-6 px-4 py-2">
               <Zap className="w-4 h-4 mr-2" />
-              Next-Gen Cross-Chain Swaps
+              {"ETH <-> XLM"}
             </Badge>
 
             <h1 className="text-6xl md:text-8xl font-bold mb-8 leading-tight">
