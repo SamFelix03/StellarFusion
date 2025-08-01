@@ -27,6 +27,8 @@ import {
 import Dither from "./components/Dither"
 import { createAuctionClient, Auction, SingleAuction, SegmentedAuction, AuctionSegment } from "@/lib/auction-client"
 import { useWallet } from "./components/WalletProvider"
+import ResolverExecutionModal from "./components/ResolverExecutionModal"
+import { toast } from "@/hooks/use-toast"
 
 interface AuctionDetails {
   orderId: string
@@ -68,6 +70,8 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
   const [hoveredRow, setHoveredRow] = useState<string | null>(null)
   const [isConnected, setIsConnected] = useState(false)
   const [connectionStatus, setConnectionStatus] = useState('disconnected')
+  const [isExecutionModalOpen, setIsExecutionModalOpen] = useState(false)
+  const [executingAuction, setExecutingAuction] = useState<AuctionDetails | null>(null)
   const auctionClientRef = useRef<ReturnType<typeof createAuctionClient> | null>(null)
 
   // Get the current user's address for winner identification
@@ -390,6 +394,10 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
       if (pendingConfirmation.auctionType === 'single') {
         auctionClientRef.current.confirmAuction(pendingConfirmation.orderId, undefined, userAddress)
         console.log(`🏆 Confirming auction ${pendingConfirmation.orderId} as winner: ${userAddress}`)
+        
+        // Open execution modal for normal orders
+        setExecutingAuction(pendingConfirmation as AuctionDetails)
+        setIsExecutionModalOpen(true)
       } else if (pendingConfirmation.auctionType === 'segmented') {
         if (!selectedSegmentId) {
           alert('Please select a segment first')
@@ -397,21 +405,31 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
         }
         auctionClientRef.current.confirmAuction(pendingConfirmation.orderId, selectedSegmentId, userAddress)
         console.log(`🏆 Confirming segment ${selectedSegmentId} of auction ${pendingConfirmation.orderId} as winner: ${userAddress}`)
+        
+        // For partial fills, we'll implement a different workflow later
+        alert(`Successfully confirmed segment ${selectedSegmentId} as winner!`)
       }
 
-      // Close modals
+      // Close confirmation modal
       setIsConfirmModalOpen(false)
-      setIsModalOpen(false)
       setPendingConfirmation(null)
-      setSelectedAuction(null)
-      setSelectedSegmentId(null)
-
-      // Show success message
-      alert(`Successfully confirmed as winner!`)
+      setSelectedSegmentId(null) // Reset segment selection
     } catch (error) {
       console.error('❌ Error confirming auction:', error)
       alert('Failed to confirm auction. Please try again.')
     }
+  }
+
+  const handleExecutionComplete = () => {
+    setIsExecutionModalOpen(false)
+    setIsModalOpen(false)
+    setExecutingAuction(null)
+    setSelectedAuction(null)
+    
+    toast({
+      title: "Execution Complete!",
+      description: "The resolver workflow has been completed successfully.",
+    })
   }
 
   const handleRefreshConnection = () => {
@@ -1023,6 +1041,14 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
            </div>
          </DialogContent>
        </Dialog>
+
+       {/* Resolver Execution Modal */}
+       <ResolverExecutionModal
+         isOpen={isExecutionModalOpen}
+         onClose={() => setIsExecutionModalOpen(false)}
+         auction={executingAuction}
+         onExecutionComplete={handleExecutionComplete}
+       />
      </div>
    )
  }
