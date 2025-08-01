@@ -28,6 +28,7 @@ import Dither from "./components/Dither"
 import { createAuctionClient, Auction, SingleAuction, SegmentedAuction, AuctionSegment } from "@/lib/auction-client"
 import { useWallet } from "./components/WalletProvider"
 import ResolverExecutionModal from "./components/ResolverExecutionModal"
+import SourceEscrowModal from "./components/SourceEscrowModal"
 import { toast } from "@/hooks/use-toast"
 
 interface AuctionDetails {
@@ -72,6 +73,8 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
   const [connectionStatus, setConnectionStatus] = useState('disconnected')
   const [isExecutionModalOpen, setIsExecutionModalOpen] = useState(false)
   const [executingAuction, setExecutingAuction] = useState<AuctionDetails | null>(null)
+  const [isSourceEscrowModalOpen, setIsSourceEscrowModalOpen] = useState(false)
+  const [sourceEscrowAuction, setSourceEscrowAuction] = useState<AuctionDetails | null>(null)
   const auctionClientRef = useRef<ReturnType<typeof createAuctionClient> | null>(null)
 
   // Get the current user's address for winner identification
@@ -395,9 +398,9 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
         auctionClientRef.current.confirmAuction(pendingConfirmation.orderId, undefined, userAddress)
         console.log(`🏆 Confirming auction ${pendingConfirmation.orderId} as winner: ${userAddress}`)
         
-        // Open execution modal for normal orders
-        setExecutingAuction(pendingConfirmation as AuctionDetails)
-        setIsExecutionModalOpen(true)
+        // Open source escrow modal for normal orders
+        setSourceEscrowAuction(pendingConfirmation as AuctionDetails)
+        setIsSourceEscrowModalOpen(true)
       } else if (pendingConfirmation.auctionType === 'segmented') {
         if (!selectedSegmentId) {
           alert('Please select a segment first')
@@ -406,8 +409,9 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
         auctionClientRef.current.confirmAuction(pendingConfirmation.orderId, selectedSegmentId, userAddress)
         console.log(`🏆 Confirming segment ${selectedSegmentId} of auction ${pendingConfirmation.orderId} as winner: ${userAddress}`)
         
-        // For partial fills, we'll implement a different workflow later
-        alert(`Successfully confirmed segment ${selectedSegmentId} as winner!`)
+        // Open source escrow modal for partial fill orders
+        setSourceEscrowAuction(pendingConfirmation as AuctionDetails)
+        setIsSourceEscrowModalOpen(true)
       }
 
       // Close confirmation modal
@@ -430,6 +434,24 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
       title: "Execution Complete!",
       description: "The resolver workflow has been completed successfully.",
     })
+  }
+
+  const handleSourceEscrowCreated = (result: any) => {
+    setIsSourceEscrowModalOpen(false)
+    setSourceEscrowAuction(null)
+    
+    if (result.success) {
+      toast({
+        title: "Source Escrow Created!",
+        description: `Source escrow created successfully. Transaction: ${result.transactionHash?.slice(0, 10)}...`,
+      })
+    } else {
+      toast({
+        title: "Source Escrow Creation Failed",
+        description: result.error || "Unknown error occurred",
+        variant: "destructive"
+      })
+    }
   }
 
   const handleRefreshConnection = () => {
@@ -1048,6 +1070,14 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
          onClose={() => setIsExecutionModalOpen(false)}
          auction={executingAuction}
          onExecutionComplete={handleExecutionComplete}
+       />
+
+       {/* Source Escrow Modal */}
+       <SourceEscrowModal
+         isOpen={isSourceEscrowModalOpen}
+         onClose={() => setIsSourceEscrowModalOpen(false)}
+         auction={sourceEscrowAuction}
+         onEscrowCreated={handleSourceEscrowCreated}
        />
      </div>
    )

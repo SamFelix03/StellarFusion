@@ -20,6 +20,7 @@ export interface SingleAuction {
   sourceAmount: number
   marketPrice: number
   slippage: number
+  hashedSecret: string // Include hashedSecret for resolver
   winner: string | null
   status: 'active' | 'completed' | 'expired'
   endTime: number | null
@@ -29,6 +30,7 @@ export interface SegmentedAuction {
   orderId: string
   orderType: 'partialfill'
   auctionType: 'segmented'
+  hashedSecret: string // Include hashedSecret for resolver
   segments: AuctionSegment[]
   totalWinners: any[]
   marketPrice: number
@@ -212,6 +214,7 @@ class DutchAuctionClient implements AuctionClient {
             sourceAmount: data.sourceAmount,
             marketPrice: data.marketPrice,
             slippage: data.slippage,
+            hashedSecret: data.hashedSecret, // Include hashedSecret for resolver
             winner: null,
             status: 'active',
             endTime: null
@@ -229,6 +232,7 @@ class DutchAuctionClient implements AuctionClient {
              orderId: data.orderId,
              orderType: 'partialfill',
              auctionType: 'segmented',
+             hashedSecret: data.hashedSecret || '', // Include hashedSecret for resolver
              segments: data.segments || [],
              totalWinners: [],
              marketPrice: data.marketPrice,
@@ -256,6 +260,7 @@ class DutchAuctionClient implements AuctionClient {
             sourceAmount: data.sourceAmount || 0,
             marketPrice: data.marketPrice,
             slippage: data.slippage || 0.02,
+            hashedSecret: data.hashedSecret || '', // Include hashedSecret for resolver
             winner: null,
             status: 'active',
             endTime: null

@@ -447,6 +447,7 @@ class DutchAuctionServer {
       orderId: orderId,
       orderType: 'partialfill',
       auctionType: 'segmented',
+      hashedSecret: orderData.hashedSecret || '', // Include hashedSecret for resolver
       segments: [
         {
           id: 1,
@@ -500,11 +501,17 @@ class DutchAuctionServer {
     // Add to active auctions
     this.activeAuctions.set(orderId, auction);
     
+    console.log('🔐 ========================================');
+    console.log('🔐 SEGMENTED AUCTION CREATED WITH HASHED SECRET');
+    console.log('🔐 ========================================');
+    console.log('📋 Order ID:', orderId);
+    console.log('🔐 Hashed Secret (Merkle Root):', auction.hashedSecret);
     console.log(`📊 Segment 1: ${segment1StartPrice} → ${minimumPrice} (${segmentAmount} tokens)`);
     console.log(`📊 Segment 2: ${segment2StartPrice} → ${minimumPrice} (${segmentAmount} tokens)`);
     console.log(`📊 Segment 3: ${segment3StartPrice} → ${minimumPrice} (${segmentAmount} tokens)`);
     console.log(`📊 Segment 4: ${segment4StartPrice} → ${minimumPrice} (${segmentAmount} tokens)`);
     console.log(`🛑 Stop when price ≤ ${minimumPrice} or winner arrives for each segment`);
+    console.log('🔐 ========================================');
     
     // Broadcast new auction to all clients
     this.broadcastToAll({
@@ -514,7 +521,8 @@ class DutchAuctionServer {
       marketPrice: auction.marketPrice,
       sourceAmount: auction.sourceAmount,
       slippage: auction.slippage,
-      minimumPrice: auction.minimumPrice
+      minimumPrice: auction.minimumPrice,
+      hashedSecret: auction.hashedSecret // Include hashedSecret for resolver
     });
     
     // Start all segments in parallel
@@ -579,6 +587,7 @@ class DutchAuctionServer {
       orderId: orderId,
       orderType: 'normal',
       auctionType: 'single',
+      hashedSecret: orderData.hashedSecret || '', // Include hashedSecret for resolver
       currentPrice: startPrice,
       startPrice: startPrice,
       endPrice: marketPrice,
@@ -595,8 +604,14 @@ class DutchAuctionServer {
     // Add to active auctions
     this.activeAuctions.set(orderId, auction);
     
+    console.log('🔐 ========================================');
+    console.log('🔐 SINGLE AUCTION CREATED WITH HASHED SECRET');
+    console.log('🔐 ========================================');
+    console.log('📋 Order ID:', orderId);
+    console.log('🔐 Hashed Secret:', auction.hashedSecret);
     console.log(`📊 Price range: ${startPrice} → ${minimumPrice}`);
     console.log(`📉 Market price: ${marketPrice}`);
+    console.log('🔐 ========================================');
     
     // Broadcast new auction to all clients
     this.broadcastToAll({
@@ -607,7 +622,8 @@ class DutchAuctionServer {
       endPrice: minimumPrice,
       marketPrice: marketPrice,
       sourceAmount: sourceAmount,
-      slippage: slippage
+      slippage: slippage,
+      hashedSecret: auction.hashedSecret // Include hashedSecret for resolver
     });
     
     // Start single auction
@@ -1032,7 +1048,9 @@ app.post('/partialfill', async (req, res) => {
       srcAmount,
       dstAmount,
       slippage,
-      market_price
+      market_price,
+      hashedSecret,
+      segmentSecrets
     } = req.body;
 
     // Validate required fields
@@ -1055,14 +1073,28 @@ app.post('/partialfill', async (req, res) => {
       dstAmount: dstAmount?.toString() || '',
       slippage: slippage?.toString() || '0.005', // Default 0.5% slippage
       market_price: market_price?.toString() || '3900', // Default market price
+      hashedSecret: hashedSecret || '', // Store hashedSecret for resolver
       orderType: 'partialfill', // Identify this as a partial fill order
       auctionType: 'segmented', // Segmented auction with 4 segments
       segmentAmount: (parseFloat(srcAmount) / 4).toString(), // Amount per segment
       createdAt: new Date().toISOString(),
       status: 'pending',
-      // Store segment secrets (will be populated by maker)
-      segmentSecrets: JSON.stringify([])
+      // Store segment secrets if provided, otherwise empty array
+      segmentSecrets: segmentSecrets ? JSON.stringify(segmentSecrets) : JSON.stringify([])
     };
+
+    console.log('🔐 ========================================');
+    console.log('🔐 STORING PARTIAL FILL ORDER IN DATABASE');
+    console.log('🔐 ========================================');
+    console.log('📋 Order ID:', orderId);
+    console.log('🔐 Hashed Secret (Merkle Root):', hashedSecret);
+    console.log('🔐 Segment Secrets Count:', segmentSecrets ? segmentSecrets.length : 0);
+    if (segmentSecrets) {
+      segmentSecrets.forEach((segment, index) => {
+        console.log(`   Segment ${segment.segmentId}: Secret: ${segment.secret.slice(0, 10)}..., Hash: ${segment.hashedSecret.slice(0, 10)}...`);
+      });
+    }
+    console.log('🔐 ========================================');
 
     // Store in DynamoDB
     const params = {
@@ -1119,7 +1151,8 @@ app.post('/create', async (req, res) => {
       cancellationStart,
       publicCancellationStart,
       slippage,
-      market_price
+      market_price,
+      hashedSecret
     } = req.body;
 
     // Validate required fields
@@ -1142,11 +1175,19 @@ app.post('/create', async (req, res) => {
       dstAmount: dstAmount?.toString() || '',
       slippage: slippage?.toString() || '0.005', // Default 0.5% slippage
       market_price: market_price?.toString() || '3900', // Default market price
+      hashedSecret: hashedSecret || '', // Store hashedSecret for resolver
       orderType: 'normal', // Identify this as a normal order
       auctionType: 'single', // Single auction (no segments)
       createdAt: new Date().toISOString(),
       status: 'pending'
     };
+
+    console.log('🔐 ========================================');
+    console.log('🔐 STORING NORMAL ORDER IN DATABASE');
+    console.log('🔐 ========================================');
+    console.log('📋 Order ID:', orderId);
+    console.log('🔐 Hashed Secret:', hashedSecret);
+    console.log('🔐 ========================================');
 
     // Store in DynamoDB
     const params = {
@@ -1802,6 +1843,74 @@ app.post('/verify', async (req, res) => {
       success: false,
       error: 'Internal server error',
       message: error.message
+    });
+  }
+});
+
+// Endpoint to get hashedSecret by order ID
+app.post('/get-hashed-secret', async (req, res) => {
+  console.log('🔍 ========================================');
+  console.log('🔍 GET HASHED SECRET ENDPOINT CALLED');
+  console.log('🔍 ========================================');
+  
+  try {
+    const { orderId } = req.body;
+    console.log('📋 Order ID:', orderId);
+    
+    if (!orderId) {
+      console.error('❌ Order ID is required');
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Order ID is required' 
+      });
+    }
+
+    // Query DynamoDB for the order
+    const params = {
+      TableName: TABLE_NAME,
+      Key: {
+        orderId: orderId
+      }
+    };
+
+    console.log('🔍 Querying DynamoDB with params:', JSON.stringify(params, null, 2));
+    
+    const result = await dynamodb.get(params).promise();
+    console.log('📋 DynamoDB result:', JSON.stringify(result, null, 2));
+    
+    if (!result.Item) {
+      console.error('❌ Order not found in database');
+      return res.status(404).json({ 
+        success: false, 
+        error: 'Order not found' 
+      });
+    }
+
+    const hashedSecret = result.Item.hashedSecret;
+    console.log('🔐 HashedSecret from database:', hashedSecret);
+    
+    if (!hashedSecret) {
+      console.error('❌ HashedSecret not found in order data');
+      return res.status(404).json({ 
+        success: false, 
+        error: 'HashedSecret not found in order data' 
+      });
+    }
+
+    console.log('✅ HashedSecret retrieved successfully');
+    console.log('🔐 HashedSecret length:', hashedSecret.length);
+    
+    res.json({
+      success: true,
+      hashedSecret: hashedSecret,
+      orderId: orderId
+    });
+
+  } catch (error) {
+    console.error('❌ Error fetching hashedSecret:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
     });
   }
 });

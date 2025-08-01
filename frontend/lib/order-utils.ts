@@ -295,6 +295,14 @@ export function createOrder(params: OrderCreationParams): OrderData {
   console.log('✅ ========================================');
   console.log('✅ ORDER CREATION COMPLETED SUCCESSFULLY');
   console.log('✅ ========================================');
+  console.log('🔐 ========================================');
+  console.log('🔐 HASHED SECRET GENERATION VERIFICATION');
+  console.log('🔐 ========================================');
+  console.log('📋 Hashed Secret:', orderData.hashedSecret);
+  console.log('📋 Hashed Secret type:', typeof orderData.hashedSecret);
+  console.log('📋 Hashed Secret length:', orderData.hashedSecret ? orderData.hashedSecret.length : 'undefined');
+  console.log('📋 Is Partial Fill:', orderData.isPartialFillEnabled);
+  console.log('🔐 ========================================');
   console.log('📋 Final order data:', {
     orderId: orderData.orderId,
     buyerAddress: orderData.buyerAddress,
@@ -508,8 +516,8 @@ export async function sendOrderToRelayer(orderData: OrderData, isPartialFill: bo
   console.log(`🌐 Endpoint: ${endpoint}`);
   console.log(`🔀 Order type: ${isPartialFill ? 'Partial Fill' : 'Single Fill'}`);
   
-  // Prepare request body (excluding internal data)
-  const requestBody = {
+  // Prepare request body (including hashedSecret for resolver)
+  const requestBody: any = {
     orderId: orderData.orderId,
     buyerAddress: orderData.buyerAddress,
     srcChainId: orderData.srcChainId,
@@ -519,9 +527,36 @@ export async function sendOrderToRelayer(orderData: OrderData, isPartialFill: bo
     srcAmount: orderData.srcAmount,
     dstAmount: orderData.dstAmount,
     market_price: orderData.market_price,
-    slippage: orderData.slippage
+    slippage: orderData.slippage,
+    hashedSecret: orderData.hashedSecret // Include hashedSecret for resolver
   };
 
+  // For partial fill orders, also include the segment secrets
+  if (isPartialFill && orderData.partialFillSecrets && orderData.partialFillSecretHashes) {
+    const segmentSecrets = orderData.partialFillSecrets.map((secret, index) => ({
+      segmentId: index + 1,
+      secret: secret,
+      hashedSecret: orderData.partialFillSecretHashes![index]
+    }));
+    
+    requestBody.segmentSecrets = segmentSecrets;
+    console.log('🔐 Including segment secrets for partial fill order:');
+    segmentSecrets.forEach((segment, index) => {
+      console.log(`   Segment ${index + 1}: Secret: ${segment.secret.slice(0, 10)}..., Hash: ${segment.hashedSecret.slice(0, 10)}...`);
+    });
+  }
+
+  console.log('🔐 ========================================');
+  console.log('🔐 DEBUGGING HASHED SECRET IN REQUEST');
+  console.log('🔐 ========================================');
+  console.log('📋 OrderData hashedSecret:', orderData.hashedSecret);
+  console.log('📋 OrderData hashedSecret type:', typeof orderData.hashedSecret);
+  console.log('📋 OrderData hashedSecret length:', orderData.hashedSecret ? orderData.hashedSecret.length : 'undefined');
+  console.log('📋 Request body hashedSecret:', requestBody.hashedSecret);
+  console.log('📋 Request body hashedSecret type:', typeof requestBody.hashedSecret);
+  console.log('📋 Request body hashedSecret length:', requestBody.hashedSecret ? requestBody.hashedSecret.length : 'undefined');
+  console.log('🔐 ========================================');
+  
   console.log('📋 Request body (excluding internal data):');
   console.log(JSON.stringify(requestBody, null, 2));
   console.log('📋 Internal data (not sent to relayer):');
@@ -565,5 +600,44 @@ export async function sendOrderToRelayer(orderData: OrderData, isPartialFill: bo
   } catch (error) {
     console.error('❌ Error sending order to relayer:', error);
     throw error;
+  }
+} 
+
+// Function to fetch hashedSecret directly from database by order ID
+export async function fetchHashedSecretFromDatabase(orderId: string): Promise<string | null> {
+  console.log('🔍 ========================================');
+  console.log('🔍 FETCHING HASHED SECRET FROM DATABASE');
+  console.log('🔍 ========================================');
+  console.log('📋 Order ID:', orderId);
+  
+  try {
+    const response = await fetch(`http://localhost:8000/get-hashed-secret`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ orderId }),
+    });
+
+    if (!response.ok) {
+      console.error('❌ Failed to fetch hashedSecret from database:', response.status, response.statusText);
+      return null;
+    }
+
+    const result = await response.json();
+    console.log('📋 Database response:', result);
+    
+    if (result.success && result.hashedSecret) {
+      console.log('✅ HashedSecret fetched successfully from database');
+      console.log('🔐 HashedSecret:', result.hashedSecret);
+      console.log('🔐 HashedSecret length:', result.hashedSecret.length);
+      return result.hashedSecret;
+    } else {
+      console.error('❌ HashedSecret not found in database response');
+      return null;
+    }
+  } catch (error) {
+    console.error('❌ Error fetching hashedSecret from database:', error);
+    return null;
   }
 } 
