@@ -1,7 +1,7 @@
 "use client"
 
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { motion } from "framer-motion"
-import { Dialog, DialogContent } from "@/components/ui/dialog"
 import { Loader2, Clock, CheckCircle } from "lucide-react"
 
 interface LoadingModalProps {
@@ -15,71 +15,74 @@ export default function LoadingModal({
   isOpen, 
   message = "Creating your order...", 
   step = 1,
-  totalSteps = 3
+  totalSteps = 4 // Updated from 3 to 4
 }: LoadingModalProps) {
   const steps = [
     "Generating secrets and hashes...",
-    "Preparing order data...",
-    "Sending to relayer..."
+    "Preparing buyer approval...", // New step
+    "Sending to relayer...",
+    "Processing response..."
   ]
 
   return (
-    <Dialog open={isOpen} onOpenChange={() => {}}>
+    <Dialog open={isOpen}>
       <DialogContent className="bg-black/40 backdrop-blur-xl border border-white/10 max-w-md">
-        <div className="flex flex-col items-center justify-center py-8 space-y-6">
+        <DialogHeader>
+          <DialogTitle className="text-white text-center">
+            {message}
+          </DialogTitle>
+        </DialogHeader>
+        
+        <div className="flex flex-col items-center space-y-6 py-4">
           {/* Loading Animation */}
           <motion.div
             animate={{ rotate: 360 }}
             transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
-            className="relative"
+            className="w-16 h-16 border-4 border-white/20 border-t-white rounded-full"
           >
-            <div className="w-16 h-16 border-4 border-white/20 border-t-white rounded-full" />
-            <div className="absolute inset-0 w-16 h-16 border-4 border-transparent border-t-blue-400 rounded-full animate-pulse" />
+            <Loader2 className="w-8 h-8 text-white mx-auto mt-2" />
           </motion.div>
-
-          {/* Main Message */}
-          <div className="text-center space-y-2">
-            <h3 className="text-lg font-semibold text-white">{message}</h3>
-            <p className="text-sm text-white/60">Please wait while we process your order</p>
-          </div>
 
           {/* Progress Steps */}
           <div className="w-full space-y-3">
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-white/60">Progress</span>
-              <span className="text-white">{step}/{totalSteps}</span>
-            </div>
-            
-            {/* Progress Bar */}
-            <div className="w-full bg-white/10 rounded-full h-2">
-              <motion.div
-                className="bg-gradient-to-r from-blue-400 to-purple-500 h-2 rounded-full"
-                initial={{ width: 0 }}
-                animate={{ width: `${(step / totalSteps) * 100}%` }}
-                transition={{ duration: 0.5 }}
-              />
-            </div>
-
-            {/* Current Step */}
-            <div className="flex items-center space-x-2 text-sm text-white/80">
-              <Clock className="w-4 h-4" />
-              <span>{steps[step - 1] || "Processing..."}</span>
-            </div>
-          </div>
-
-          {/* Status Icons */}
-          <div className="flex items-center space-x-4">
-            {Array.from({ length: totalSteps }, (_, i) => (
-              <div key={i} className="flex items-center space-x-2">
-                {i < step - 1 ? (
-                  <CheckCircle className="w-5 h-5 text-green-400" />
-                ) : i === step - 1 ? (
-                  <Loader2 className="w-5 h-5 text-blue-400 animate-spin" />
-                ) : (
-                  <div className="w-5 h-5 rounded-full border-2 border-white/20" />
-                )}
+            {steps.map((stepText, index) => (
+              <div key={index} className="flex items-center space-x-3">
+                <div className={`w-6 h-6 rounded-full flex items-center justify-center ${
+                  index + 1 < step 
+                    ? 'bg-green-500' 
+                    : index + 1 === step 
+                    ? 'bg-blue-500 animate-pulse' 
+                    : 'bg-white/20'
+                }`}>
+                  {index + 1 < step ? (
+                    <CheckCircle className="w-4 h-4 text-white" />
+                  ) : index + 1 === step ? (
+                    <Clock className="w-4 h-4 text-white" />
+                  ) : (
+                    <span className="text-white text-xs">{index + 1}</span>
+                  )}
+                </div>
+                <span className={`text-sm ${
+                  index + 1 <= step ? 'text-white' : 'text-white/40'
+                }`}>
+                  {stepText}
+                </span>
               </div>
             ))}
+          </div>
+
+          {/* Progress Bar */}
+          <div className="w-full bg-white/20 rounded-full h-2">
+            <motion.div
+              className="bg-white h-2 rounded-full"
+              initial={{ width: 0 }}
+              animate={{ width: `${(step / totalSteps) * 100}%` }}
+              transition={{ duration: 0.5 }}
+            />
+          </div>
+
+          <div className="text-white/60 text-sm">
+            Step {step} of {totalSteps}
           </div>
         </div>
       </DialogContent>

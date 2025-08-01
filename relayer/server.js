@@ -364,14 +364,20 @@ class DutchAuctionServer {
     
     // Get slippage from order data
     const slippage = parseFloat(orderData.slippage) || 0.02; // Default 2% slippage
-    const minimumPrice = Math.round(marketPrice * (1 - slippage)); // Market price with slippage
+    const minimumPrice = parseFloat((marketPrice * (1 - slippage)).toFixed(5)); // Market price with slippage - exact to 5 decimals
     
-    // Calculate segment starting prices based on market price (1.2x for all segments)
-    const segmentStartPrice = Math.floor(marketPrice * 1.2); // 1.2 x market price for all segments
+    // Calculate segment starting prices based on market price (original logic) - exact to 5 decimals
+    const segment1StartPrice = parseFloat((marketPrice * 1.077).toFixed(5)); // ~4,200 for 3,900 market
+    const segment2StartPrice = parseFloat((marketPrice * 1.051).toFixed(5)); // ~4,100 for 3,900 market  
+    const segment3StartPrice = parseFloat((marketPrice * 1.026).toFixed(5)); // ~4,000 for 3,900 market
+    const segment4StartPrice = parseFloat((marketPrice * 1.0).toFixed(5)); // Market price
     
-    console.log(`📊 Market price: ${marketPrice}`);
-    console.log(`📈 Starting price for all segments: ${segmentStartPrice} (1.2 × ${marketPrice})`);
-    console.log(`📉 Minimum price: ${minimumPrice} (${marketPrice} × (1 - ${slippage}))`);
+    console.log(`📊 Market price: ${marketPrice.toFixed(5)}`);
+    console.log(`📈 Segment 1 starting price: ${segment1StartPrice.toFixed(5)} (1.077 × ${marketPrice.toFixed(5)})`);
+    console.log(`📈 Segment 2 starting price: ${segment2StartPrice.toFixed(5)} (1.051 × ${marketPrice.toFixed(5)})`);
+    console.log(`📈 Segment 3 starting price: ${segment3StartPrice.toFixed(5)} (1.026 × ${marketPrice.toFixed(5)})`);
+    console.log(`📈 Segment 4 starting price: ${segment4StartPrice.toFixed(5)} (1.0 × ${marketPrice.toFixed(5)})`);
+    console.log(`📉 Minimum price: ${minimumPrice.toFixed(5)} (${marketPrice.toFixed(5)} × (1 - ${slippage}))`);
     console.log(`⏱️ Price reduction: 5% every 10 seconds for each segment`);
     
     // Create auction object with segmented data
@@ -383,9 +389,9 @@ class DutchAuctionServer {
         {
           id: 1,
           amount: segmentAmount,
-          startPrice: segmentStartPrice,
+          startPrice: segment1StartPrice,
           endPrice: minimumPrice,
-          currentPrice: segmentStartPrice,
+          currentPrice: segment1StartPrice,
           winner: null,
           status: 'active',
           endTime: null // No fixed end time, ends when price reaches minimum or winner
@@ -393,9 +399,9 @@ class DutchAuctionServer {
         {
           id: 2,
           amount: segmentAmount,
-          startPrice: segmentStartPrice,
+          startPrice: segment2StartPrice,
           endPrice: minimumPrice,
-          currentPrice: segmentStartPrice,
+          currentPrice: segment2StartPrice,
           winner: null,
           status: 'active',
           endTime: null // No fixed end time, ends when price reaches minimum or winner
@@ -403,9 +409,9 @@ class DutchAuctionServer {
         {
           id: 3,
           amount: segmentAmount,
-          startPrice: segmentStartPrice,
+          startPrice: segment3StartPrice,
           endPrice: minimumPrice,
-          currentPrice: segmentStartPrice,
+          currentPrice: segment3StartPrice,
           winner: null,
           status: 'active',
           endTime: null // No fixed end time, ends when price reaches minimum or winner
@@ -413,9 +419,9 @@ class DutchAuctionServer {
         {
           id: 4,
           amount: segmentAmount,
-          startPrice: segmentStartPrice,
+          startPrice: segment4StartPrice,
           endPrice: minimumPrice,
-          currentPrice: segmentStartPrice,
+          currentPrice: segment4StartPrice,
           winner: null,
           status: 'active',
           endTime: null // No fixed end time, ends when price reaches minimum or winner
@@ -432,7 +438,10 @@ class DutchAuctionServer {
     // Add to active auctions
     this.activeAuctions.set(orderId, auction);
     
-    console.log(`📊 All segments: ${segmentStartPrice} → ${minimumPrice} (${segmentAmount} tokens each)`);
+    console.log(`📊 Segment 1: ${segment1StartPrice} → ${minimumPrice} (${segmentAmount} tokens)`);
+    console.log(`📊 Segment 2: ${segment2StartPrice} → ${minimumPrice} (${segmentAmount} tokens)`);
+    console.log(`📊 Segment 3: ${segment3StartPrice} → ${minimumPrice} (${segmentAmount} tokens)`);
+    console.log(`📊 Segment 4: ${segment4StartPrice} → ${minimumPrice} (${segmentAmount} tokens)`);
     console.log(`🛑 Stop when price ≤ ${minimumPrice} or winner arrives for each segment`);
     
     // Broadcast new auction to all clients

@@ -21,12 +21,13 @@ import {
   CheckCircle,
 } from "lucide-react"
 import { useWallet } from "./WalletProvider"
-import { useBalance } from "wagmi"
+import { useBalance, useAccount, useWalletClient } from "wagmi"
 import Aurora from "./Aurora"
 import OrderDetails from "./OrderDetails"
 import PartialFillSettings from "./PartialFillSettings"
 import LoadingModal from "./LoadingModal"
-import { createOrder, sendOrderToRelayer, OrderData } from "@/lib/order-utils"
+import { createOrder, sendOrderToRelayer, prepareBuyer, OrderData } from "@/lib/order-utils"
+import { toast } from "@/components/ui/use-toast"
 
 interface Token {
   symbol: string
@@ -116,6 +117,7 @@ const mockTokens: Token[] = [
 
 export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => void }) {
   const { isConnected, address, connect, disconnect, isLoading } = useWallet()
+  const { data: walletClient } = useWalletClient()
   
   const [swapState, setSwapState] = useState<SwapState>({
     fromToken: null,
@@ -303,118 +305,129 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
 
   // Order creation functions
   const handleCreateOrder = () => {
-    console.log('🚀 Starting order creation process...')
-    
-    if (!address) {
-      console.error('❌ No wallet address available')
-      setOrderStatus({ type: 'error', message: 'Please connect your wallet first' })
-      return
-    }
-
     if (!swapState.fromToken || !swapState.toToken || !swapState.fromAmount || !swapState.toAmount) {
-      console.error('❌ Invalid swap state for order creation')
-      setOrderStatus({ type: 'error', message: 'Please complete the swap configuration' })
+      toast({
+        title: "Missing Information",
+        description: "Please fill in all swap details before creating an order.",
+        variant: "destructive",
+      })
       return
     }
 
-    // Show loading modal
-    setShowLoadingModal(true)
-    setLoadingStep(1)
-
-    console.log('📋 Creating order with parameters:', {
-      sourceChain: swapState.fromChain,
-      destinationChain: swapState.toChain,
-      sourceToken: swapState.fromToken.symbol,
-      destinationToken: swapState.toToken.symbol,
-      sourceAmount: swapState.fromAmount,
-      destinationAmount: swapState.toAmount,
-      buyerAddress: address,
-      enablePartialFills,
-      partsCount
-    })
+    if (!address) {
+      toast({
+        title: "Wallet Not Connected",
+        description: "Please connect your wallet to create an order.",
+        variant: "destructive",
+      })
+      return
+    }
 
     try {
-      // Step 1: Generate secrets and hashes
-      setLoadingStep(1)
-      const order = createOrder({
-        sourceChain: swapState.fromChain,
-        destinationChain: swapState.toChain,
-        sourceToken: swapState.fromToken.symbol,
+      console.log('🚀 Creating order...')
+      setShowLoadingModal(true)
+      setLoadingStep(1) // Step 1: Order creation
+      
+      // Convert token symbol to the correct format for order creation
+      const getTokenKey = (token: Token) => {
+        if (token.symbol === "Sepolia ETH") return "sepolia-eth"
+        if (token.symbol === "ETH") return "eth"
+        return token.symbol.toLowerCase().replace(' ', '-')
+      }
+      
+      const orderData = createOrder({
+        buyerAddress: address,
+        sourceChain: swapState.fromChain.toLowerCase(),
+        destinationChain: swapState.toChain.toLowerCase(),
+        sourceToken: getTokenKey(swapState.fromToken),
         destinationToken: swapState.toToken.symbol,
         sourceAmount: swapState.fromAmount,
         destinationAmount: swapState.toAmount,
-        buyerAddress: address,
-        enablePartialFills,
-        partsCount
+        enablePartialFills: enablePartialFills,
+        partsCount: enablePartialFills ? partsCount : undefined
       })
 
-      // Step 2: Prepare order data
-      setLoadingStep(2)
-      console.log('✅ Order created successfully:', order)
-      setOrderData(order)
-      
-      // Step 3: Show order details
-      setLoadingStep(3)
-      setShowLoadingModal(false)
+      setOrderData(orderData)
       setShowOrderDetails(true)
-      setOrderStatus({ type: null, message: '' })
-    } catch (error) {
-      console.error('❌ Error creating order:', error)
       setShowLoadingModal(false)
-      setOrderStatus({ type: 'error', message: 'Failed to create order' })
+      
+      console.log('✅ Order created successfully!')
+      console.log('Order Data:', orderData)
+      
+    } catch (error) {
+      setShowLoadingModal(false)
+      console.error('❌ Error creating order:', error)
+      
+      toast({
+        title: "Error Creating Order",
+        description: error instanceof Error ? error.message : "Unknown error occurred",
+        variant: "destructive",
+      })
     }
   }
 
   const handleConfirmOrder = async () => {
-    if (!orderData) {
-      console.error('❌ No order data available')
-      return
-    }
-
-    console.log('📤 Confirming order and sending to relayer...')
-    setIsCreatingOrder(true)
-    setOrderStatus({ type: null, message: '' })
-
-    // Show loading modal for relayer communication
-    setShowLoadingModal(true)
-    setLoadingStep(1)
+    if (!orderData) return;
 
     try {
-      // Step 1: Preparing to send
-      setLoadingStep(1)
+      setShowLoadingModal(true);
+      setLoadingStep(2); // Step 2: Buyer preparation
       
-      // Step 2: Sending to relayer
-      setLoadingStep(2)
-      const result = await sendOrderToRelayer(orderData, orderData.isPartialFillEnabled || false)
+      console.log('🚀 Starting order confirmation process...');
       
-      // Step 3: Processing response
-      setLoadingStep(3)
-      console.log('✅ Order sent to relayer successfully:', result)
+      // Step 1: Prepare buyer (APPROVAL PHASE) - IMMEDIATELY after order creation
+      console.log('\n📋 STEP 1: Buyer Preparation');
+      console.log('-----------------------------');
       
-      setOrderStatus({ 
-        type: 'success', 
-        message: `Order created successfully! Order ID: ${orderData.orderId.slice(0, 8)}...` 
-      })
+      if (!address) {
+        throw new Error('Wallet not connected');
+      }
       
-      // Close modals after successful creation
-      setShowLoadingModal(false)
-      setTimeout(() => {
-        setShowOrderDetails(false)
-        setOrderData(null)
-        setOrderStatus({ type: null, message: '' })
-      }, 3000)
+      if (!walletClient) {
+        throw new Error('Wallet client not available');
+      }
+      
+      await prepareBuyer(
+        orderData.srcChainId as string,
+        orderData.srcToken as string,
+        orderData.srcAmount as string,
+        walletClient
+      );
+      
+      setLoadingStep(3); // Step 3: Sending to relayer
+      
+      // Step 2: Send order to relayer
+      console.log('\n🔄 STEP 2: Sending to Relayer');
+      console.log('------------------------------');
+      
+      const response = await sendOrderToRelayer(orderData, orderData.isPartialFillEnabled);
+      
+      setLoadingStep(4); // Step 4: Processing response
+      
+      setShowLoadingModal(false);
+      setShowOrderDetails(false);
+      setOrderData(null);
+      
+      console.log('✅ Order sent to relayer successfully!');
+      console.log('Response:', response);
+      
+      // Show success message
+      toast({
+        title: "Order Created Successfully!",
+        description: `Order ID: ${orderData.orderId}`,
+      });
       
     } catch (error) {
-      console.error('❌ Error sending order to relayer:', error)
-      setShowLoadingModal(false)
-      setOrderStatus({ 
-        type: 'error', 
-        message: 'Failed to send order to relayer. Please try again.' 
-      })
-    } finally {
-      setIsCreatingOrder(false)
+      setShowLoadingModal(false);
+      console.error('❌ Error confirming order:', error);
+      
+      toast({
+        title: "Error Creating Order",
+        description: error instanceof Error ? error.message : "Unknown error occurred",
+        variant: "destructive",
+      });
     }
-  }
+  };
 
   return (
     <div className="min-h-screen bg-black text-white relative overflow-hidden">
@@ -768,9 +781,10 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
        <LoadingModal
          isOpen={showLoadingModal}
          step={loadingStep}
-         totalSteps={3}
+         totalSteps={4}
          message={loadingStep === 1 ? "Creating your order..." : 
-                 loadingStep === 2 ? "Sending to relayer..." : 
+                 loadingStep === 2 ? "Preparing buyer approval..." : 
+                 loadingStep === 3 ? "Sending to relayer..." : 
                  "Processing response..."}
        />
      </div>

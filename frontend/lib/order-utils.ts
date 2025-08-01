@@ -141,6 +141,39 @@ export interface OrderData {
   partialFillSecretHashes?: string[];
 }
 
+// Add chain configuration for frontend
+const CHAIN_CONFIGS = {
+  'ethereum': {
+    name: 'Sepolia Testnet',
+    chainId: 11155111,
+    factoryAddress: '0x4F25B17649F0A056138E251487c27A22D793DBA7',
+    lopAddress: '0x13F4118A0C9AA013eeB078f03318aeea84469cDD',
+    tokens: {
+      'sepolia-eth': {
+        name: 'Ethereum',
+        symbol: 'ETH',
+        address: '0x0000000000000000000000000000000000000000',
+        decimals: 18,
+        isNative: true
+      },
+      'eth': {
+        name: 'Ethereum',
+        symbol: 'ETH',
+        address: '0x0000000000000000000000000000000000000000',
+        decimals: 18,
+        isNative: true
+      },
+      'WETH': {
+        name: 'Wrapped Ethereum',
+        symbol: 'WETH',
+        address: '0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9',
+        decimals: 18,
+        isNative: false
+      }
+    }
+  }
+};
+
 // Chain configuration mapping
 const CHAIN_IDS: { [key: string]: number | string } = {
   'Ethereum': 'ethereum',
@@ -289,6 +322,143 @@ export function createOrder(params: OrderCreationParams): OrderData {
   console.log('🔧 ========================================');
 
   return orderData;
+}
+
+/**
+ * Prepare buyer by approving factory to spend their tokens
+ * This should be called IMMEDIATELY after order creation
+ */
+export async function prepareBuyer(
+  sourceChain: string,
+  sourceToken: string,
+  sourceAmount: string,
+  walletClient: any
+): Promise<void> {
+  console.log('🔐 Preparing buyer approval...');
+  
+  const chainConfig = CHAIN_CONFIGS[sourceChain as keyof typeof CHAIN_CONFIGS];
+  if (!chainConfig) {
+    throw new Error(`Chain configuration not found for ${sourceChain}`);
+  }
+  
+  const tokenConfig = chainConfig.tokens[sourceToken as keyof typeof chainConfig.tokens];
+  if (!tokenConfig) {
+    throw new Error(`Token configuration not found for ${sourceToken}`);
+  }
+  
+  const factoryAddress = chainConfig.factoryAddress;
+  const amountInWei = ethers.utils.parseUnits(sourceAmount, tokenConfig.decimals);
+  
+  console.log(`📋 Approval Details:`);
+  console.log(`   Chain: ${sourceChain}`);
+  console.log(`   Token: ${sourceToken} (${tokenConfig.address})`);
+  console.log(`   Amount: ${sourceAmount} (${amountInWei.toString()} wei)`);
+  console.log(`   Factory: ${factoryAddress}`);
+  console.log(`   Is Native: ${tokenConfig.isNative}`);
+  
+  try {
+    // Import viem for contract interactions
+    const { createPublicClient, http, parseEther, encodeFunctionData } = await import('viem');
+    const { sepolia } = await import('wagmi/chains');
+    
+    // Create public client
+    const publicClient = createPublicClient({
+      chain: sepolia,
+      transport: http()
+    });
+    
+    if (tokenConfig.isNative) {
+      // For native tokens (ETH), we need to wrap them first
+      console.log('🔄 Wrapping native token...');
+      
+      const wethAddress = '0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9';
+      
+      // Encode deposit function
+      const depositData = encodeFunctionData({
+        abi: [{
+          name: 'deposit',
+          type: 'function',
+          stateMutability: 'payable',
+          inputs: [],
+          outputs: []
+        }],
+        functionName: 'deposit'
+      });
+      
+      // Send deposit transaction
+      console.log('📝 Wrapping ETH to WETH...');
+      const depositHash = await walletClient.sendTransaction({
+        to: wethAddress as `0x${string}`,
+        data: depositData,
+        value: BigInt(amountInWei.toString())
+      });
+      
+      console.log('⏳ Waiting for wrap transaction...');
+      await publicClient.waitForTransactionReceipt({ hash: depositHash });
+      console.log('✅ Token wrapped successfully');
+      
+      // Encode approve function
+      const approveData = encodeFunctionData({
+        abi: [{
+          name: 'approve',
+          type: 'function',
+          stateMutability: 'nonpayable',
+          inputs: [
+            { name: 'spender', type: 'address' },
+            { name: 'amount', type: 'uint256' }
+          ],
+          outputs: [{ name: '', type: 'bool' }]
+        }],
+        functionName: 'approve',
+        args: [factoryAddress as `0x${string}`, BigInt(amountInWei.toString())]
+      });
+      
+      // Send approve transaction
+      console.log('📝 Approving factory to spend wrapped tokens...');
+      const approveHash = await walletClient.sendTransaction({
+        to: wethAddress as `0x${string}`,
+        data: approveData
+      });
+      
+      console.log('⏳ Waiting for approval transaction...');
+      await publicClient.waitForTransactionReceipt({ hash: approveHash });
+      console.log('✅ Factory approved to spend wrapped tokens');
+      
+    } else {
+      // For ERC20 tokens, just approve
+      console.log('📝 Approving ERC20 token...');
+      
+      const approveData = encodeFunctionData({
+        abi: [{
+          name: 'approve',
+          type: 'function',
+          stateMutability: 'nonpayable',
+          inputs: [
+            { name: 'spender', type: 'address' },
+            { name: 'amount', type: 'uint256' }
+          ],
+          outputs: [{ name: '', type: 'bool' }]
+        }],
+        functionName: 'approve',
+        args: [factoryAddress as `0x${string}`, BigInt(amountInWei.toString())]
+      });
+      
+      const approveHash = await walletClient.sendTransaction({
+        to: tokenConfig.address as `0x${string}`,
+        data: approveData
+      });
+      
+      console.log('⏳ Waiting for approval transaction...');
+      await publicClient.waitForTransactionReceipt({ hash: approveHash });
+      console.log('✅ Factory approved to spend tokens');
+    }
+    
+    console.log('🎉 Buyer preparation completed successfully!');
+    
+  } catch (error) {
+    console.error('❌ Error during buyer preparation:', error);
+    throw new Error(`Buyer preparation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
 }
 
 // API call functions
