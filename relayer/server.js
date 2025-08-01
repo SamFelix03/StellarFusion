@@ -87,6 +87,33 @@ class DutchAuctionServer {
         console.log(`📝 Auction client registered: ${data.name}`);
         break;
         
+      case 'request_active_auctions':
+        // Send list of currently active auctions to the client
+        const activeAuctionsList = Array.from(this.activeAuctions.values()).map(auction => ({
+          orderId: auction.orderId,
+          auctionType: auction.auctionType,
+          currentPrice: auction.currentPrice || auction.segments?.[0]?.currentPrice,
+          startPrice: auction.startPrice || auction.segments?.[0]?.startPrice,
+          endPrice: auction.endPrice || auction.minimumPrice,
+          minimumPrice: auction.minimumPrice,
+          sourceAmount: auction.sourceAmount,
+          marketPrice: auction.marketPrice,
+          slippage: auction.slippage,
+          winner: auction.winner,
+          status: auction.status || 'active',
+          endTime: auction.endTime,
+          segments: auction.segments,
+          totalWinners: auction.totalWinners,
+          intervals: auction.intervals
+        }));
+        
+        ws.send(JSON.stringify({
+          type: 'active_auctions_received',
+          auctions: activeAuctionsList
+        }));
+        console.log(`📋 Sent ${activeAuctionsList.length} active auctions to client`);
+        break;
+        
       case 'join_auction':
         const orderId = data.orderId;
         const auction = this.activeAuctions.get(orderId);
@@ -586,11 +613,11 @@ class DutchAuctionServer {
         timeRemaining: null // No fixed time
       });
       
-      // Check if price reached minimum price
+      // Check if price reached minimum price - but don't end auction automatically
       if (auction.currentPrice <= auction.minimumPrice) {
-        console.log(`🛑 Single auction reached minimum price (${auction.minimumPrice}), ending auction`);
-        clearInterval(interval); // Clear the interval before ending auction
-        this.endSingleAuction(orderId, 'expired');
+        console.log(`🛑 Single auction reached minimum price (${auction.minimumPrice}), stopping price reduction`);
+        clearInterval(interval); // Clear the interval but keep auction active
+        // Don't end the auction - let it stay active until someone resolves it
         return; // Exit the interval callback
       }
     }, 10000); // Update every 10 seconds
@@ -637,11 +664,11 @@ class DutchAuctionServer {
         timeRemaining: null // No fixed time
       });
       
-      // Check if price reached minimum price
+      // Check if price reached minimum price - but don't end segment automatically
       if (segment.currentPrice <= segment.endPrice) {
-        console.log(`🛑 Segment ${segmentId} reached minimum price (${segment.endPrice}), ending segment`);
-        clearInterval(interval); // Clear the interval before ending segment
-        this.endSegment(orderId, segmentId, 'expired');
+        console.log(`🛑 Segment ${segmentId} reached minimum price (${segment.endPrice}), stopping price reduction`);
+        clearInterval(interval); // Clear the interval but keep segment active
+        // Don't end the segment - let it stay active until someone resolves it
         return; // Exit the interval callback
       }
     }, 10000); // Update every 10 seconds
