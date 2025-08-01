@@ -6,7 +6,7 @@ const readline = require('readline');
 require('dotenv').config();
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8000;
 const WS_PORT = process.env.WS_PORT || 8080;
 
 // Middleware
@@ -317,7 +317,7 @@ class DutchAuctionServer {
     });
   }
   
-  async startSegmentedAuction(orderId, startingPrice) {
+  async startSegmentedAuction(orderId) {
     // Check if auction already exists for this order
     if (this.activeAuctions.has(orderId)) {
       console.log(`❌ Auction already active for order ${orderId}`);
@@ -362,16 +362,17 @@ class DutchAuctionServer {
     console.log(`🔢 Segment amount: ${segmentAmount}`);
     console.log(`⏱️ Segment duration: 1 minute each`);
     
-    // Calculate segment starting prices based on market price
-    const segment1StartPrice = Math.floor(marketPrice * 1.077); // ~4,200 for 3,900 market
-    const segment2StartPrice = Math.floor(marketPrice * 1.051); // ~4,100 for 3,900 market  
-    const segment3StartPrice = Math.floor(marketPrice * 1.026); // ~4,000 for 3,900 market
-    const segment4StartPrice = marketPrice; // Market price
+    // Get slippage from order data
+    const slippage = parseFloat(orderData.slippage) || 0.02; // Default 2% slippage
+    const minimumPrice = Math.round(marketPrice * (1 - slippage)); // Market price with slippage
     
-    // Calculate price drops for segments 1-3 (segment 4 doesn't drop)
-    const segment1EndPrice = Math.floor(marketPrice * 1.026); // ~4,000
-    const segment2EndPrice = Math.floor(marketPrice * 1.013); // ~3,950
-    const segment3EndPrice = marketPrice; // ~3,900
+    // Calculate segment starting prices based on market price (1.2x for all segments)
+    const segmentStartPrice = Math.floor(marketPrice * 1.2); // 1.2 x market price for all segments
+    
+    console.log(`📊 Market price: ${marketPrice}`);
+    console.log(`📈 Starting price for all segments: ${segmentStartPrice} (1.2 × ${marketPrice})`);
+    console.log(`📉 Minimum price: ${minimumPrice} (${marketPrice} × (1 - ${slippage}))`);
+    console.log(`⏱️ Price reduction: 5% every 10 seconds for each segment`);
     
     // Create auction object with segmented data
     const auction = {
@@ -382,66 +383,67 @@ class DutchAuctionServer {
         {
           id: 1,
           amount: segmentAmount,
-          startPrice: segment1StartPrice,
-          endPrice: segment1EndPrice,
-          currentPrice: segment1StartPrice,
+          startPrice: segmentStartPrice,
+          endPrice: minimumPrice,
+          currentPrice: segmentStartPrice,
           winner: null,
           status: 'active',
-          endTime: Date.now() + this.segmentDuration
+          endTime: null // No fixed end time, ends when price reaches minimum or winner
         },
         {
           id: 2,
           amount: segmentAmount,
-          startPrice: segment2StartPrice,
-          endPrice: segment2EndPrice,
-          currentPrice: segment2StartPrice,
+          startPrice: segmentStartPrice,
+          endPrice: minimumPrice,
+          currentPrice: segmentStartPrice,
           winner: null,
           status: 'active',
-          endTime: Date.now() + this.segmentDuration
+          endTime: null // No fixed end time, ends when price reaches minimum or winner
         },
         {
           id: 3,
           amount: segmentAmount,
-          startPrice: segment3StartPrice,
-          endPrice: segment3EndPrice,
-          currentPrice: segment3StartPrice,
+          startPrice: segmentStartPrice,
+          endPrice: minimumPrice,
+          currentPrice: segmentStartPrice,
           winner: null,
           status: 'active',
-          endTime: Date.now() + this.segmentDuration
+          endTime: null // No fixed end time, ends when price reaches minimum or winner
         },
         {
           id: 4,
           amount: segmentAmount,
-          startPrice: segment4StartPrice,
-          endPrice: segment4StartPrice,
-          currentPrice: segment4StartPrice,
+          startPrice: segmentStartPrice,
+          endPrice: minimumPrice,
+          currentPrice: segmentStartPrice,
           winner: null,
           status: 'active',
-          endTime: Date.now() + this.segmentDuration
+          endTime: null // No fixed end time, ends when price reaches minimum or winner
         }
       ],
       totalWinners: [],
       marketPrice: marketPrice,
       sourceAmount: sourceAmount,
+      slippage: slippage,
+      minimumPrice: minimumPrice,
       intervals: [] // Array to store all segment intervals
     };
     
     // Add to active auctions
     this.activeAuctions.set(orderId, auction);
     
-    console.log(`📊 Segment 1: ${segment1StartPrice} → ${segment1EndPrice} (${segmentAmount} tokens)`);
-    console.log(`📊 Segment 2: ${segment2StartPrice} → ${segment2EndPrice} (${segmentAmount} tokens)`);
-    console.log(`📊 Segment 3: ${segment3StartPrice} → ${segment3EndPrice} (${segmentAmount} tokens)`);
-    console.log(`📊 Segment 4: ${segment4StartPrice} (fixed market price) (${segmentAmount} tokens)`);
+    console.log(`📊 All segments: ${segmentStartPrice} → ${minimumPrice} (${segmentAmount} tokens each)`);
+    console.log(`🛑 Stop when price ≤ ${minimumPrice} or winner arrives for each segment`);
     
     // Broadcast new auction to all clients
     this.broadcastToAll({
       type: 'new_segmented_auction',
       orderId: orderId,
       segments: auction.segments,
-      currentSegment: auction.currentSegment,
       marketPrice: auction.marketPrice,
-      sourceAmount: auction.sourceAmount
+      sourceAmount: auction.sourceAmount,
+      slippage: auction.slippage,
+      minimumPrice: auction.minimumPrice
     });
     
     // Start all segments in parallel
@@ -450,7 +452,7 @@ class DutchAuctionServer {
     }
   }
 
-  async startSingleAuction(orderId, startingPrice) {
+  async startSingleAuction(orderId) {
     // Check if auction already exists for this order
     if (this.activeAuctions.has(orderId)) {
       console.log(`❌ Auction already active for order ${orderId}`);
@@ -487,51 +489,54 @@ class DutchAuctionServer {
     // Get source amount and market price
     const sourceAmount = parseFloat(orderData.srcAmount) || 0;
     const marketPrice = parseFloat(orderData.market_price) || 3900; // Default market price
-    const slippage = parseFloat(orderData.slippage) || 0.005; // Default 0.5% slippage
+    const slippage = parseFloat(orderData.slippage) || 0.02; // Default 2% slippage
+    
+    // Calculate auction parameters according to new logic
+    const startPrice = Math.floor(marketPrice * 1.2); // 1.2 x market price
+    const minimumPrice = Math.round(marketPrice * (1 - slippage)); // Market price with slippage
     
     console.log(`\n🚀 Starting Single Dutch Auction for order ${orderId}`);
     console.log(`💰 Total source amount: ${sourceAmount}`);
     console.log(`📊 Market price: ${marketPrice}`);
-    console.log(`📉 Starting price: ${startingPrice}`);
-    console.log(`🎯 Target price: ${marketPrice}`);
-    console.log(`⏱️ Auction duration: Until market price or winner`);
-    
-    // Calculate minimum price based on slippage
-    const slippageAmount = startingPrice * slippage;
-    const minimumPrice = startingPrice - slippageAmount;
+    console.log(`📈 Starting price: ${startPrice} (1.2 × ${marketPrice})`);
+    console.log(`📉 Minimum price: ${minimumPrice} (${marketPrice} × (1 - ${slippage}))`);
+    console.log(`⏱️ Price reduction: 5% every 10 seconds`);
+    console.log(`🛑 Stop when price ≤ ${minimumPrice} or winner arrives`);
     
     // Create auction object for single auction
     const auction = {
       orderId: orderId,
       orderType: 'normal',
       auctionType: 'single',
-      currentPrice: startingPrice,
-      startPrice: startingPrice,
+      currentPrice: startPrice,
+      startPrice: startPrice,
       endPrice: marketPrice,
       minimumPrice: minimumPrice,
       sourceAmount: sourceAmount,
       marketPrice: marketPrice,
+      slippage: slippage,
       winner: null,
       status: 'active',
-      endTime: null, // No fixed end time, ends when price reaches market price or winner
+      endTime: null, // No fixed end time, ends when price reaches minimum price or winner
       interval: null
     };
     
     // Add to active auctions
     this.activeAuctions.set(orderId, auction);
     
-    console.log(`📊 Price range: ${startingPrice} → ${marketPrice}`);
-    console.log(`📉 Minimum price (with slippage): ${minimumPrice}`);
+    console.log(`📊 Price range: ${startPrice} → ${minimumPrice}`);
+    console.log(`📉 Market price: ${marketPrice}`);
     
     // Broadcast new auction to all clients
     this.broadcastToAll({
       type: 'new_single_auction',
       orderId: orderId,
-      currentPrice: startingPrice,
-      startPrice: startingPrice,
-      endPrice: marketPrice,
+      currentPrice: startPrice,
+      startPrice: startPrice,
+      endPrice: minimumPrice,
+      marketPrice: marketPrice,
       sourceAmount: sourceAmount,
-      marketPrice: marketPrice
+      slippage: slippage
     });
     
     // Start single auction
@@ -544,7 +549,8 @@ class DutchAuctionServer {
     
     console.log(`\n🎯 Starting Single Auction timer for order ${orderId}`);
     console.log(`💰 Starting price: ${auction.startPrice}`);
-    console.log(`📉 End price: ${auction.endPrice}`);
+    console.log(`📉 Minimum price: ${auction.minimumPrice}`);
+    console.log(`📊 Market price: ${auction.marketPrice}`);
     console.log(`⏱️ Price reduction: 5% every 10 seconds`);
     
     // Price reduction: 5% of current price every 10 seconds
@@ -556,24 +562,27 @@ class DutchAuctionServer {
       
       // Calculate price reduction (5% of current price)
       const priceReduction = auction.currentPrice * 0.05;
-      auction.currentPrice = Math.max(auction.endPrice, auction.currentPrice - priceReduction);
+      auction.currentPrice = Math.max(auction.minimumPrice, auction.currentPrice - priceReduction);
       
-      console.log(`💰 Order ${orderId} - Current price: ${Math.floor(auction.currentPrice)}`);
+      console.log(`💰 Order ${orderId} - Current price: ${auction.currentPrice.toFixed(2)}`);
       
       // Broadcast updated price
       this.broadcastToAll({
         type: 'single_auction_update',
         orderId: orderId,
-        currentPrice: Math.floor(auction.currentPrice),
+        currentPrice: Math.round(auction.currentPrice * 100) / 100, // Round to 2 decimal places
         startPrice: auction.startPrice,
-        endPrice: auction.endPrice,
+        endPrice: auction.minimumPrice,
+        marketPrice: auction.marketPrice,
         timeRemaining: null // No fixed time
       });
       
-      // Check if price reached end price (market price)
-      if (auction.currentPrice <= auction.endPrice) {
-        console.log(`🛑 Single auction reached market price, ending auction`);
+      // Check if price reached minimum price
+      if (auction.currentPrice <= auction.minimumPrice) {
+        console.log(`🛑 Single auction reached minimum price (${auction.minimumPrice}), ending auction`);
+        clearInterval(interval); // Clear the interval before ending auction
         this.endSingleAuction(orderId, 'expired');
+        return; // Exit the interval callback
       }
     }, 10000); // Update every 10 seconds
     
@@ -590,57 +599,46 @@ class DutchAuctionServer {
     
     console.log(`\n🎯 Starting Segment ${segmentId} auction for order ${orderId}`);
     console.log(`💰 Starting price: ${segment.startPrice}`);
-    console.log(`📉 End price: ${segment.endPrice}`);
-    console.log(`⏱️ Duration: 1 minute`);
+    console.log(`📉 Minimum price: ${segment.endPrice}`);
+    console.log(`📊 Market price: ${auction.marketPrice}`);
+    console.log(`⏱️ Price reduction: 5% every 10 seconds`);
     
-    // Calculate price drop per second for segments 1-3
-    if (segmentId <= 3) {
-      const totalPriceDrop = segment.startPrice - segment.endPrice;
-      const priceDropPerSecond = totalPriceDrop / 60; // 60 seconds
-      
-      const interval = setInterval(() => {
-        if (segment.winner) {
-          clearInterval(interval);
-          return;
-        }
-        
-        // Reduce price linearly
-        segment.currentPrice = Math.max(segment.endPrice, segment.currentPrice - priceDropPerSecond);
-        
-        console.log(`💰 Order ${orderId} Segment ${segmentId} - Current price: ${Math.floor(segment.currentPrice)}`);
-        
-        // Broadcast updated price
-        this.broadcastToAll({
-          type: 'segment_update',
-          orderId: orderId,
-          segmentId: segmentId,
-          currentPrice: Math.floor(segment.currentPrice),
-          startPrice: segment.startPrice,
-          endPrice: segment.endPrice,
-          timeRemaining: segment.endTime - Date.now()
-        });
-        
-        // Check if price reached end price
-        if (segment.currentPrice <= segment.endPrice) {
-          console.log(`🛑 Segment ${segmentId} reached end price, ending segment`);
-          this.endSegment(orderId, segmentId, 'expired');
-        }
-      }, 1000); // Update every second
-      
-      // Store interval reference
-      auction.intervals.push(interval);
-    } else {
-      // Segment 4 - fixed price, no price drop
-      console.log(`💰 Segment 4 - Fixed price: ${segment.currentPrice}`);
-    }
-    
-    // Set timeout to end segment after 1 minute
-    setTimeout(() => {
-      if (segment && !segment.winner) {
-        console.log(`⏰ Segment ${segmentId} time expired! No winner.`);
-        this.endSegment(orderId, segmentId, 'expired');
+    // Price reduction: 5% of current price every 10 seconds (same as single auction)
+    const interval = setInterval(() => {
+      if (segment.winner) {
+        clearInterval(interval);
+        return;
       }
-    }, this.segmentDuration);
+      
+      // Calculate price reduction (5% of current price)
+      const priceReduction = segment.currentPrice * 0.05;
+      segment.currentPrice = Math.max(segment.endPrice, segment.currentPrice - priceReduction);
+      
+      console.log(`💰 Order ${orderId} Segment ${segmentId} - Current price: ${segment.currentPrice.toFixed(2)}`);
+      
+      // Broadcast updated price
+      this.broadcastToAll({
+        type: 'segment_update',
+        orderId: orderId,
+        segmentId: segmentId,
+        currentPrice: Math.round(segment.currentPrice * 100) / 100, // Round to 2 decimal places
+        startPrice: segment.startPrice,
+        endPrice: segment.endPrice,
+        marketPrice: auction.marketPrice,
+        timeRemaining: null // No fixed time
+      });
+      
+      // Check if price reached minimum price
+      if (segment.currentPrice <= segment.endPrice) {
+        console.log(`🛑 Segment ${segmentId} reached minimum price (${segment.endPrice}), ending segment`);
+        clearInterval(interval); // Clear the interval before ending segment
+        this.endSegment(orderId, segmentId, 'expired');
+        return; // Exit the interval callback
+      }
+    }, 10000); // Update every 10 seconds
+    
+    // Store interval reference
+    auction.intervals.push(interval);
   }
   
   endSegment(orderId, segmentId, status) {
@@ -649,6 +647,12 @@ class DutchAuctionServer {
     
     const segment = auction.segments.find(s => s.id === segmentId);
     if (!segment) return;
+    
+    // Prevent multiple calls to endSegment for the same segment
+    if (segment.status === 'completed' || segment.status === 'expired') {
+      console.log(`⚠️ Segment ${segmentId} already ended with status: ${segment.status}`);
+      return;
+    }
     
     segment.status = status;
     
@@ -687,9 +691,11 @@ class DutchAuctionServer {
       status: status,
       winner: segment.winner || null, // Store null if no winner
       startPrice: segment.startPrice,
-      endPrice: segment.endPrice,
+      endPrice: segment.endPrice, // This is now the minimum price
       finalPrice: Math.floor(segment.currentPrice),
       amount: segment.amount,
+      marketPrice: auction.marketPrice,
+      slippage: auction.slippage,
       endTime: new Date().toISOString()
     };
     
@@ -751,9 +757,11 @@ class DutchAuctionServer {
       status: segment.status,
       winner: segment.winner || null,
       startPrice: segment.startPrice,
-      endPrice: segment.endPrice,
+      endPrice: segment.endPrice, // This is now the minimum price
       finalPrice: Math.floor(segment.currentPrice),
       amount: segment.amount,
+      marketPrice: auction.marketPrice,
+      slippage: auction.slippage,
       endTime: new Date().toISOString()
     }));
     
@@ -800,9 +808,10 @@ class DutchAuctionServer {
       winner: auction.winner || null,
       finalPrice: Math.floor(auction.currentPrice),
       startPrice: auction.startPrice,
-      endPrice: auction.endPrice,
-      sourceAmount: auction.sourceAmount,
+      endPrice: auction.minimumPrice,
       marketPrice: auction.marketPrice,
+      sourceAmount: auction.sourceAmount,
+      slippage: auction.slippage,
       auctionType: 'single',
       status: status,
       completedAt: new Date().toISOString()
@@ -817,7 +826,10 @@ class DutchAuctionServer {
       orderId: orderId,
       status: status,
       winner: auction.winner,
-      finalPrice: Math.floor(auction.currentPrice)
+      finalPrice: Math.floor(auction.currentPrice),
+      startPrice: auction.startPrice,
+      endPrice: auction.minimumPrice,
+      marketPrice: auction.marketPrice
     });
     
     // Remove from active auctions
@@ -862,7 +874,7 @@ class DutchAuctionServer {
             }
           });
         } else if (auction.auctionType === 'single') {
-          console.log(`  - ${orderId} (Single): $${Math.floor(auction.currentPrice)} → $${auction.endPrice}`);
+          console.log(`  - ${orderId} (Single): $${Math.floor(auction.currentPrice)} → $${auction.minimumPrice} (Market: $${auction.marketPrice})`);
         }
       });
     }
@@ -992,9 +1004,8 @@ app.post('/partialfill', async (req, res) => {
     console.log('✅ Partial fill order created successfully:', orderId);
 
     // Automatically start segmented Dutch auction for the new order
-    const startingPrice = parseInt(dstAmount) || 10000; // Use destination amount as starting price
     if (auctionServer) {
-      await auctionServer.startSegmentedAuction(orderId, startingPrice);
+      await auctionServer.startSegmentedAuction(orderId);
     }
 
     res.status(201).json({
@@ -1006,8 +1017,7 @@ app.post('/partialfill', async (req, res) => {
         status: 'pending',
         createdAt: item.createdAt,
         auctionStarted: true,
-        auctionType: 'segmented',
-        startingPrice: startingPrice
+        auctionType: 'segmented'
       }
     });
 
@@ -1078,9 +1088,8 @@ app.post('/create', async (req, res) => {
     console.log('✅ Normal order created successfully:', orderId);
 
     // Automatically start single Dutch auction for the new order
-    const startingPrice = parseInt(dstAmount) || 10000; // Use destination amount as starting price
     if (auctionServer) {
-      await auctionServer.startSingleAuction(orderId, startingPrice);
+      await auctionServer.startSingleAuction(orderId);
     }
 
     res.status(201).json({
@@ -1092,8 +1101,7 @@ app.post('/create', async (req, res) => {
         status: 'pending',
         createdAt: item.createdAt,
         auctionStarted: true,
-        auctionType: 'single',
-        startingPrice: startingPrice
+        auctionType: 'single'
       }
     });
 

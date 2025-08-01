@@ -17,10 +17,16 @@ import {
   Wallet,
   X,
   ArrowLeft,
+  AlertCircle,
+  CheckCircle,
 } from "lucide-react"
 import { useWallet } from "./WalletProvider"
 import { useBalance } from "wagmi"
 import Aurora from "./Aurora"
+import OrderDetails from "./OrderDetails"
+import PartialFillSettings from "./PartialFillSettings"
+import LoadingModal from "./LoadingModal"
+import { createOrder, sendOrderToRelayer, OrderData } from "@/lib/order-utils"
 
 interface Token {
   symbol: string
@@ -126,6 +132,19 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
   const [priceData, setPriceData] = useState<PriceData>({})
   const [currentUsdValue, setCurrentUsdValue] = useState(0)
   const [tokensWithBalances, setTokensWithBalances] = useState<Token[]>(mockTokens)
+  
+  // Order creation state
+  const [enablePartialFills, setEnablePartialFills] = useState(false)
+  const [partsCount, setPartsCount] = useState(4)
+  const [showOrderDetails, setShowOrderDetails] = useState(false)
+  const [orderData, setOrderData] = useState<OrderData | null>(null)
+  const [isCreatingOrder, setIsCreatingOrder] = useState(false)
+  const [showLoadingModal, setShowLoadingModal] = useState(false)
+  const [loadingStep, setLoadingStep] = useState(1)
+  const [orderStatus, setOrderStatus] = useState<{
+    type: 'success' | 'error' | null
+    message: string
+  }>({ type: null, message: '' })
 
   // Fetch real ETH balance using wagmi
   const { data: ethBalance } = useBalance({
@@ -281,6 +300,121 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
   const canSwap = swapState.fromToken && swapState.toToken && 
                   swapState.fromAmount && parseFloat(swapState.fromAmount) > 0 &&
                   parseFloat(swapState.fromAmount) <= (swapState.fromToken?.balance || 0)
+
+  // Order creation functions
+  const handleCreateOrder = () => {
+    console.log('🚀 Starting order creation process...')
+    
+    if (!address) {
+      console.error('❌ No wallet address available')
+      setOrderStatus({ type: 'error', message: 'Please connect your wallet first' })
+      return
+    }
+
+    if (!swapState.fromToken || !swapState.toToken || !swapState.fromAmount || !swapState.toAmount) {
+      console.error('❌ Invalid swap state for order creation')
+      setOrderStatus({ type: 'error', message: 'Please complete the swap configuration' })
+      return
+    }
+
+    // Show loading modal
+    setShowLoadingModal(true)
+    setLoadingStep(1)
+
+    console.log('📋 Creating order with parameters:', {
+      sourceChain: swapState.fromChain,
+      destinationChain: swapState.toChain,
+      sourceToken: swapState.fromToken.symbol,
+      destinationToken: swapState.toToken.symbol,
+      sourceAmount: swapState.fromAmount,
+      destinationAmount: swapState.toAmount,
+      buyerAddress: address,
+      enablePartialFills,
+      partsCount
+    })
+
+    try {
+      // Step 1: Generate secrets and hashes
+      setLoadingStep(1)
+      const order = createOrder({
+        sourceChain: swapState.fromChain,
+        destinationChain: swapState.toChain,
+        sourceToken: swapState.fromToken.symbol,
+        destinationToken: swapState.toToken.symbol,
+        sourceAmount: swapState.fromAmount,
+        destinationAmount: swapState.toAmount,
+        buyerAddress: address,
+        enablePartialFills,
+        partsCount
+      })
+
+      // Step 2: Prepare order data
+      setLoadingStep(2)
+      console.log('✅ Order created successfully:', order)
+      setOrderData(order)
+      
+      // Step 3: Show order details
+      setLoadingStep(3)
+      setShowLoadingModal(false)
+      setShowOrderDetails(true)
+      setOrderStatus({ type: null, message: '' })
+    } catch (error) {
+      console.error('❌ Error creating order:', error)
+      setShowLoadingModal(false)
+      setOrderStatus({ type: 'error', message: 'Failed to create order' })
+    }
+  }
+
+  const handleConfirmOrder = async () => {
+    if (!orderData) {
+      console.error('❌ No order data available')
+      return
+    }
+
+    console.log('📤 Confirming order and sending to relayer...')
+    setIsCreatingOrder(true)
+    setOrderStatus({ type: null, message: '' })
+
+    // Show loading modal for relayer communication
+    setShowLoadingModal(true)
+    setLoadingStep(1)
+
+    try {
+      // Step 1: Preparing to send
+      setLoadingStep(1)
+      
+      // Step 2: Sending to relayer
+      setLoadingStep(2)
+      const result = await sendOrderToRelayer(orderData, orderData.isPartialFillEnabled || false)
+      
+      // Step 3: Processing response
+      setLoadingStep(3)
+      console.log('✅ Order sent to relayer successfully:', result)
+      
+      setOrderStatus({ 
+        type: 'success', 
+        message: `Order created successfully! Order ID: ${orderData.orderId.slice(0, 8)}...` 
+      })
+      
+      // Close modals after successful creation
+      setShowLoadingModal(false)
+      setTimeout(() => {
+        setShowOrderDetails(false)
+        setOrderData(null)
+        setOrderStatus({ type: null, message: '' })
+      }, 3000)
+      
+    } catch (error) {
+      console.error('❌ Error sending order to relayer:', error)
+      setShowLoadingModal(false)
+      setOrderStatus({ 
+        type: 'error', 
+        message: 'Failed to send order to relayer. Please try again.' 
+      })
+    } finally {
+      setIsCreatingOrder(false)
+    }
+  }
 
   return (
     <div className="min-h-screen bg-black text-white relative overflow-hidden">
@@ -461,7 +595,7 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
                 </div>
 
                 {/* Exchange Rate */}
-                <div className="flex items-center justify-between text-sm text-white/60 mb-6">
+                <div className="flex items-center justify-between text-sm text-white/60 mb-4">
                   <span>
                     {swapState.fromToken && swapState.toToken && priceData
                       ? (() => {
@@ -483,9 +617,37 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
                   </div>
                 </div>
 
+                {/* Partial Fill Settings */}
+                <div className="mb-4">
+                  <PartialFillSettings
+                    enablePartialFills={enablePartialFills}
+                    partsCount={partsCount}
+                    onPartialFillsChange={setEnablePartialFills}
+                    onPartsCountChange={setPartsCount}
+                  />
+                </div>
+
+                {/* Order Status */}
+                {orderStatus.type && (
+                  <div className={`mb-4 p-3 rounded-lg border ${
+                    orderStatus.type === 'success' 
+                      ? 'bg-green-500/10 border-green-500/20 text-green-300' 
+                      : 'bg-red-500/10 border-red-500/20 text-red-300'
+                  }`}>
+                    <div className="flex items-center space-x-2">
+                      {orderStatus.type === 'success' ? (
+                        <CheckCircle className="w-4 h-4" />
+                      ) : (
+                        <AlertCircle className="w-4 h-4" />
+                      )}
+                      <span className="text-sm">{orderStatus.message}</span>
+                    </div>
+                  </div>
+                )}
+
                 {/* Swap Button */}
                 <Button
-                  onClick={() => {}}
+                  onClick={handleCreateOrder}
                   disabled={!canSwap}
                   className={`w-full py-4 rounded-2xl font-semibold ${
                     canSwap
@@ -499,7 +661,7 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
                     ? "Enter amount"
                     : parseFloat(swapState.fromAmount) > (swapState.fromToken?.balance || 0)
                     ? "Insufficient balance"
-                    : "Swap"}
+                    : "Create Order"}
                 </Button>
 
                 {/* Wallet Info */}
@@ -589,6 +751,28 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
           </Dialog>
         )}
       </AnimatePresence>
-    </div>
-  )
+
+             {/* Order Details Modal */}
+       <OrderDetails
+         orderData={orderData}
+         isOpen={showOrderDetails}
+         onClose={() => {
+           setShowOrderDetails(false)
+           setOrderData(null)
+         }}
+         onConfirm={handleConfirmOrder}
+         isLoading={isCreatingOrder}
+       />
+
+       {/* Loading Modal */}
+       <LoadingModal
+         isOpen={showLoadingModal}
+         step={loadingStep}
+         totalSteps={3}
+         message={loadingStep === 1 ? "Creating your order..." : 
+                 loadingStep === 2 ? "Sending to relayer..." : 
+                 "Processing response..."}
+       />
+     </div>
+   )
 } 
