@@ -24,11 +24,24 @@ import {
   ArrowLeft,
   RefreshCw,
 } from "lucide-react"
-import Dither from "./components/Dither"
 import { createAuctionClient, Auction, SingleAuction, SegmentedAuction, AuctionSegment } from "@/lib/auction-client"
 import { useWallet } from "./components/WalletProvider"
 import ResolverExecutionModal from "./components/ResolverExecutionModal"
 import { toast } from "@/hooks/use-toast"
+import { chainsConfig } from "@/constants/chains"
+import Aurora from "./components/Aurora"
+
+interface OrderData {
+  orderId: string
+  srcChainId: string
+  dstChainId: string
+  srcToken: string
+  dstToken: string
+  srcAmount: string
+  dstAmount: string
+  status: string
+  createdAt: string
+}
 
 interface AuctionDetails {
   // Core auction identification
@@ -64,6 +77,7 @@ interface AuctionDetails {
 export default function Component({ onBackToHome }: { onBackToHome?: () => void }) {
   const { address, stellarWallet, isConnected: walletConnected } = useWallet()
   const [auctions, setAuctions] = useState<Auction[]>([])
+  const [orderDataMap, setOrderDataMap] = useState<Map<string, OrderData>>(new Map())
   const [selectedAuction, setSelectedAuction] = useState<AuctionDetails | null>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false)
@@ -81,6 +95,36 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
     if (address) return address
     if (stellarWallet?.publicKey) return stellarWallet.publicKey
     return null
+  }
+
+  // Fetch order data from relayer
+  const fetchOrderData = async (orderId: string): Promise<OrderData | null> => {
+    try {
+      const response = await fetch(`http://localhost:8000/orders/${orderId}`)
+      if (!response.ok) {
+        console.warn(`⚠️ Failed to fetch order data for ${orderId}:`, response.status)
+        return null
+      }
+      const result = await response.json()
+      return result.data
+    } catch (error) {
+      console.error(`❌ Error fetching order data for ${orderId}:`, error)
+      return null
+    }
+  }
+
+  // Fetch order data for all auctions
+  const fetchAllOrderData = async (auctionList: Auction[]) => {
+    const newOrderDataMap = new Map<string, OrderData>()
+    
+    for (const auction of auctionList) {
+      const orderData = await fetchOrderData(auction.orderId)
+      if (orderData) {
+        newOrderDataMap.set(auction.orderId, orderData)
+      }
+    }
+    
+    setOrderDataMap(newOrderDataMap)
   }
 
 
@@ -104,109 +148,49 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
           return [...prev, auction]
         }
       })
+      
+      // Fetch order data for the new auction
+      fetchOrderData(auction.orderId).then(orderData => {
+        if (orderData) {
+          setOrderDataMap(prev => new Map(prev).set(auction.orderId, orderData))
+        }
+      })
     })
 
     client.onAuctionUpdate((auction) => {
       console.log('📊 Auction update received in resolver:', auction)
-      setAuctions(prev => {
-        console.log('📊 Updating auction:', auction.orderId)
-        return prev.map(a => a.orderId === auction.orderId ? auction : a)
-      })
+      setAuctions(prev => prev.map(a => a.orderId === auction.orderId ? auction : a))
     })
 
     client.onAuctionEnd((orderId, status) => {
-      console.log('🏁 Auction ended:', orderId, status)
-      setAuctions(prev => prev.map(a => 
-        a.orderId === orderId 
-          ? { ...a, status: status as 'completed' | 'expired' }
-          : a
-      ))
+      console.log('🏁 Auction ended in resolver:', orderId, status)
+      setAuctions(prev => prev.filter(a => a.orderId !== orderId))
     })
 
     client.onSegmentUpdate((orderId, segmentId, segment) => {
-      console.log('📊 Segment update received:', orderId, segmentId, segment)
+      console.log('📊 Segment update received in resolver:', orderId, segmentId, segment)
       setAuctions(prev => prev.map(a => {
         if (a.orderId === orderId && a.auctionType === 'segmented') {
           const segAuction = a as SegmentedAuction
-          const updatedSegments = segAuction.segments.map(s => 
-            s.id === segmentId ? segment : s
-          )
-          return { ...segAuction, segments: updatedSegments }
+          return {
+            ...segAuction,
+            segments: segAuction.segments.map(s => s.id === segmentId ? segment : s)
+          }
         }
         return a
       }))
     })
 
     client.onSegmentEnd((orderId, segmentId, status, winner) => {
-      console.log('🏁 Segment ended:', orderId, segmentId, status, winner)
-      setAuctions(prev => prev.map(a => {
-        if (a.orderId === orderId && a.auctionType === 'segmented') {
-          const segAuction = a as SegmentedAuction
-          const updatedSegments = segAuction.segments.map(s => 
-            s.id === segmentId 
-              ? { ...s, status: status as 'completed' | 'expired', winner: winner || null }
-              : s
-          )
-          return { ...segAuction, segments: updatedSegments }
-        }
-        return a
-      }))
+      console.log('🏁 Segment ended in resolver:', orderId, segmentId, status, winner)
     })
 
-    // Handle active auctions received from server
-    client.onActiveAuctionsReceived((activeAuctions) => {
-      console.log('📋 Active auctions received from server:', activeAuctions)
-      if (activeAuctions && activeAuctions.length > 0) {
-        // Convert server auction data to our format
-        const convertedAuctions: Auction[] = activeAuctions.map((serverAuction: any) => {
-          console.log('🔍 Processing server auction:', serverAuction.orderId, 'Type:', serverAuction.auctionType)
-          
-          if (serverAuction.auctionType === 'segmented') {
-            const segmentedAuction: SegmentedAuction = {
-              orderId: serverAuction.orderId,
-              orderType: 'partialfill',
-              auctionType: 'segmented',
-              hashedSecret: serverAuction.hashedSecret,
-              buyerAddress: serverAuction.buyerAddress,
-              segments: serverAuction.segments || [],
-              totalWinners: serverAuction.totalWinners || [],
-              marketPrice: serverAuction.marketPrice,
-              sourceAmount: serverAuction.sourceAmount,
-              slippage: serverAuction.slippage,
-              minimumPrice: serverAuction.minimumPrice,
-              intervals: []
-            }
-            console.log('📊 Converted to segmented auction with segments:', segmentedAuction.segments.length)
-            return segmentedAuction
-          } else {
-            const singleAuction: SingleAuction = {
-              orderId: serverAuction.orderId,
-              orderType: 'normal',
-              auctionType: 'single',
-              hashedSecret: serverAuction.hashedSecret,
-              buyerAddress: serverAuction.buyerAddress,
-              currentPrice: serverAuction.currentPrice,
-              startPrice: serverAuction.startPrice,
-              endPrice: serverAuction.endPrice,
-              minimumPrice: serverAuction.minimumPrice,
-              sourceAmount: serverAuction.sourceAmount,
-              marketPrice: serverAuction.marketPrice,
-              slippage: serverAuction.slippage,
-              winner: serverAuction.winner,
-              status: serverAuction.status || 'active',
-              endTime: serverAuction.endTime
-            }
-            console.log('📊 Converted to single auction')
-            return singleAuction
-          }
-        })
-        
-        console.log('📊 Setting active auctions:', convertedAuctions)
-        setAuctions(convertedAuctions)
-      } else {
-        console.log('📊 No active auctions found')
-        setAuctions([])
-      }
+    client.onActiveAuctionsReceived((auctions) => {
+      console.log('📋 Active auctions received in resolver:', auctions)
+      setAuctions(auctions)
+      
+      // Fetch order data for all received auctions
+      fetchAllOrderData(auctions)
     })
 
     // Connect to WebSocket server
@@ -247,15 +231,18 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
 
   // Load existing auctions from WebSocket server
   const loadExistingAuctions = async () => {
+    if (!auctionClientRef.current) return
+    
     try {
-      console.log('🔄 Requesting active auctions from WebSocket server...')
-      if (auctionClientRef.current) {
-        auctionClientRef.current.requestActiveAuctions()
-      } else {
-        console.log('⚠️ Auction client not available')
-      }
+      console.log('🔄 Requesting active auctions from server...')
+      auctionClientRef.current.requestActiveAuctions()
+      
+      // Fetch order data for existing auctions after a short delay
+      setTimeout(() => {
+        fetchAllOrderData(auctions)
+      }, 1000)
     } catch (error) {
-      console.error('❌ Failed to load existing auctions:', error)
+      console.error('❌ Error loading existing auctions:', error)
     }
   }
 
@@ -292,38 +279,61 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
   }
 
   const getTokenInfo = (auction: Auction) => {
-    // Extract token info from orderId or use defaults
-    // In a real implementation, you'd get this from the order data
-    const isPartialFill = auction.auctionType === 'segmented'
+    // Get order data from our map
+    const orderData = orderDataMap.get(auction.orderId)
     
+    if (orderData) {
+      // Use real order data
+      const srcChain = chainsConfig[orderData.srcChainId as keyof typeof chainsConfig]
+      const dstChain = chainsConfig[orderData.dstChainId as keyof typeof chainsConfig]
+      
+      if (srcChain && dstChain) {
+        const srcToken = srcChain.tokens[orderData.srcToken as keyof typeof srcChain.tokens]
+        const dstToken = dstChain.tokens[orderData.dstToken as keyof typeof dstChain.tokens]
+        
+        return {
+          tokenName: dstToken?.name || orderData.dstToken,
+          tokenSymbol: dstToken?.symbol || orderData.dstToken,
+          fromChain: srcChain.name,
+          toChain: dstChain.name,
+          srcAmount: orderData.srcAmount,
+          dstAmount: orderData.dstAmount
+        }
+      }
+    }
+    
+    // Fallback to defaults if order data not available
+    const isPartialFill = auction.auctionType === 'segmented'
     return {
       tokenName: isPartialFill ? "Stellar Lumens" : "Ethereum",
       tokenSymbol: isPartialFill ? "XLM" : "ETH",
       fromChain: isPartialFill ? "Ethereum" : "Stellar",
-      toChain: isPartialFill ? "Stellar" : "Ethereum"
+      toChain: isPartialFill ? "Stellar" : "Ethereum",
+      srcAmount: "0",
+      dstAmount: "0"
     }
   }
 
   const getStatusColor = (status: string) => {
     switch (status) {
       case "active":
-        return "bg-emerald-50/80 text-emerald-700 border-emerald-200/50"
+        return "bg-emerald-500/20 text-emerald-300 border-emerald-500/30"
       case "ending":
-        return "bg-amber-50/80 text-amber-700 border-amber-200/50"
+        return "bg-amber-500/20 text-amber-300 border-amber-500/30"
       case "completed":
-        return "bg-gray-50/80 text-gray-700 border-gray-200/50"
+        return "bg-gray-500/20 text-gray-300 border-gray-500/30"
       case "expired":
-        return "bg-red-50/80 text-red-700 border-red-200/50"
+        return "bg-red-500/20 text-red-300 border-red-500/30"
       default:
-        return "bg-blue-50/80 text-blue-700 border-blue-200/50"
+        return "bg-blue-500/20 text-blue-300 border-blue-500/30"
     }
   }
 
   const formatPrice = (price: number | undefined | null) => {
     if (price === undefined || price === null || isNaN(price)) {
-      return '$0.00000'
+      return '0.00000'
     }
-    return `$${price.toFixed(5)}`
+    return `${price.toFixed(5)}`
   }
 
   const getAuctionProgress = (auction: Auction) => {
@@ -451,17 +461,13 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
 
   return (
     <div className="min-h-screen bg-black text-white relative overflow-hidden">
-      {/* Dither Background */}
+      {/* Aurora Background with White Colors */}
       <div className="fixed inset-0 z-0">
-        <Dither
-          waveColor={[0.5, 0.5, 0.5]}
-          disableAnimation={false}
-          enableMouseInteraction={true}
-          mouseRadius={0.3}
-          colorNum={4}
-          waveAmplitude={0.3}
-          waveFrequency={3}
-          waveSpeed={0.05}
+        <Aurora 
+          colorStops={["#FFFFFF", "#F8F9FA", "#E9ECEF", "#FFFFFF"]}
+          amplitude={1.2}
+          blend={0.6}
+          speed={0.3}
         />
       </div>
 
@@ -548,7 +554,18 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
             },
             {
               label: "Total Volume",
-              value: `$${auctions.reduce((sum, a) => sum + (a.auctionType === 'single' ? (a as SingleAuction).sourceAmount : (a as SegmentedAuction).sourceAmount), 0).toFixed(2)}`,
+              value: (() => {
+                const totalAmount = auctions.reduce((sum, a) => {
+                  const tokenInfo = getTokenInfo(a)
+                  const amount = a.auctionType === 'single' 
+                    ? (a as SingleAuction).sourceAmount 
+                    : (a as SegmentedAuction).sourceAmount
+                  return sum + (amount || 0)
+                }, 0)
+                const firstAuction = auctions[0]
+                const tokenSymbol = firstAuction ? getTokenInfo(firstAuction).tokenSymbol : 'TOKENS'
+                return `${totalAmount.toFixed(4)} ${tokenSymbol}`
+              })(),
               icon: DollarSign,
               iconColor: "text-blue-600",
             },
@@ -573,12 +590,12 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
               whileHover={{ y: -4 }}
               className="group"
             >
-              <div className="relative overflow-hidden rounded-2xl bg-white/40 backdrop-blur-xl border border-white/50 p-6 shadow-lg hover:shadow-xl transition-all duration-500">
+              <div className="relative overflow-hidden rounded-2xl bg-black/40 backdrop-blur-xl border border-white/10 p-6 shadow-lg hover:shadow-xl transition-all duration-500">
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-sm font-medium text-gray-800 mb-2">{stat.label}</p>
+                    <p className="text-sm font-medium text-white/60 mb-2">{stat.label}</p>
                     <motion.p
-                      className="text-3xl font-bold text-black"
+                      className="text-2xl font-bold text-white"
                       initial={{ opacity: 0 }}
                       animate={{ opacity: 1 }}
                       transition={{ delay: 0.3 + index * 0.1, duration: 0.8 }}
@@ -586,7 +603,7 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
                       {stat.value}
                     </motion.p>
                   </div>
-                  <div className="p-4 rounded-xl bg-black/5 backdrop-blur-sm border border-black/5">
+                  <div className="p-4 rounded-xl bg-white/10 backdrop-blur-sm border border-white/10">
                     <stat.icon className={`w-6 h-6 ${stat.iconColor}`} />
                   </div>
                 </div>
@@ -608,16 +625,16 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
           transition={{ duration: 0.6, delay: 0.2 }}
           className="relative"
         >
-          <div className="rounded-3xl bg-white/40 backdrop-blur-xl border border-white/50 overflow-hidden shadow-2xl">
-            <div className="bg-white/30 backdrop-blur-sm border-b border-white/30 p-8">
+          <div className="rounded-3xl bg-black/40 backdrop-blur-xl border border-white/10 overflow-hidden shadow-2xl">
+            <div className="bg-black/30 backdrop-blur-sm border-b border-white/10 p-8">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-4">
-                  <div className="p-3 rounded-xl bg-black/5 backdrop-blur-sm border border-black/10">
-                    <Network className="w-6 h-6 text-black" />
+                  <div className="p-3 rounded-xl bg-white/10 backdrop-blur-sm border border-white/10">
+                    <Network className="w-6 h-6 text-white" />
                   </div>
                   <div>
-                    <h2 className="text-2xl font-bold text-black">Live Dutch Auctions</h2>
-                    <p className="text-gray-600">Cross-chain swap opportunities</p>
+                    <h2 className="text-2xl font-bold text-white">Live Dutch Auctions</h2>
+                    <p className="text-white/60">Cross-chain swap opportunities</p>
                   </div>
                 </div>
                 <motion.div
@@ -635,14 +652,14 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
             <div className="overflow-x-auto">
               <Table>
                 <TableHeader>
-                  <TableRow className="border-white/30 hover:bg-transparent">
-                    <TableHead className="font-semibold text-gray-700 border-white/20 py-4">Order ID</TableHead>
-                    <TableHead className="font-semibold text-gray-700 border-white/20">Auction Type</TableHead>
-                    <TableHead className="font-semibold text-gray-700 border-white/20">Current Price</TableHead>
-                    <TableHead className="font-semibold text-gray-700 border-white/20">Min Price</TableHead>
-                    <TableHead className="font-semibold text-gray-700 border-white/20">Progress</TableHead>
-                    <TableHead className="font-semibold text-gray-700 border-white/20">Status</TableHead>
-                    <TableHead className="font-semibold text-gray-700 border-white/20">Action</TableHead>
+                  <TableRow className="border-white/10 hover:bg-transparent">
+                    <TableHead className="font-semibold text-white/80 border-white/10 py-4">Order Details</TableHead>
+                    <TableHead className="font-semibold text-white/80 border-white/10">Auction Type</TableHead>
+                    <TableHead className="font-semibold text-white/80 border-white/10">Current Price</TableHead>
+                    <TableHead className="font-semibold text-white/80 border-white/10">Min Price</TableHead>
+                    <TableHead className="font-semibold text-white/80 border-white/10">Progress</TableHead>
+                    <TableHead className="font-semibold text-white/80 border-white/10">Status</TableHead>
+                    <TableHead className="font-semibold text-white/80 border-white/10">Action</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -653,7 +670,7 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
                         animate={{ opacity: 1 }}
                         className="border-white/20"
                       >
-                        <TableCell colSpan={7} className="text-center py-8 text-gray-600">
+                        <TableCell colSpan={7} className="text-center py-8 text-white/60">
                           {connectionStatus === 'connected' ? 'No active auctions' : 'Connecting to auction server...'}
                         </TableCell>
                       </motion.tr>
@@ -681,71 +698,76 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
                         onMouseLeave={() => setHoveredRow(null)}
                         onClick={() => handleAuctionClick(auction)}
                       >
-                        <TableCell className="border-white/20 py-4">
+                        <TableCell className="border-white/10 py-4">
                           <div className="flex items-center gap-4">
-                            <div className="w-12 h-12 bg-black/5 backdrop-blur-sm rounded-xl flex items-center justify-center text-black font-bold border border-black/10">
+                            <div className="w-12 h-12 bg-white/10 backdrop-blur-sm rounded-xl flex items-center justify-center text-white font-bold border border-white/10">
                                   {tokenInfo.tokenSymbol.charAt(0)}
                             </div>
                             <div>
-                                  <p className="font-semibold text-black text-lg">{tokenInfo.tokenName}</p>
-                              <div className="flex items-center gap-2 text-sm text-gray-600">
-                                    <span>{tokenInfo.fromChain}</span>
+                                  <p className="font-semibold text-white text-lg">{tokenInfo.tokenName}</p>
+                              <div className="flex items-center gap-2 text-sm text-white/70">
+                                    <span className="font-medium">{tokenInfo.fromChain}</span>
                                 <ArrowRight className="w-3 h-3" />
-                                    <span>{tokenInfo.toChain}</span>
+                                    <span className="font-medium">{tokenInfo.toChain}</span>
                                   </div>
-                                  <p className="text-xs text-gray-500 font-mono">{auction.orderId.slice(0, 8)}...{auction.orderId.slice(-8)}</p>
+                                  <div className="text-xs text-white/60 font-mono mt-1">
+                                    <span className="font-medium">Amount: {tokenInfo.srcAmount} {tokenInfo.tokenSymbol}</span>
+                                  </div>
+                                  <p className="text-xs text-white/40 font-mono">{auction.orderId.slice(0, 8)}...{auction.orderId.slice(-8)}</p>
                                 </div>
                           </div>
                         </TableCell>
                         <TableCell className="border-white/20">
                           <Badge className={`${
                                 auction.auctionType === 'single' 
-                              ? "bg-blue-50/80 text-blue-700 border-blue-200/50" 
-                              : "bg-purple-50/80 text-purple-700 border-purple-200/50"
+                              ? "bg-blue-500/20 text-blue-300 border-blue-500/30" 
+                              : "bg-purple-500/20 text-purple-300 border-purple-500/30"
                           } border font-medium backdrop-blur-sm`}>
                                 {auction.auctionType === 'single' ? "NORMAL" : "PARTIAL FILL"}
                           </Badge>
                         </TableCell>
-                        <TableCell className="border-white/20">
+                        <TableCell className="border-white/10">
                           <motion.div
                             className="flex items-center gap-2"
                                 animate={{ scale: hoveredRow === auction.orderId ? 1.03 : 1 }}
                             transition={{ duration: 0.2 }}
                           >
-                            <TrendingDown className="w-4 h-4 text-red-500" />
-                                <span className="font-bold text-xl text-black">{formatPrice(currentPrice)}</span>
+                                <span className="font-bold text-lg text-white">{formatPrice(currentPrice)} {tokenInfo.tokenSymbol}</span>
                           </motion.div>
                         </TableCell>
-                        <TableCell className="border-white/20">
-                              <span className="text-gray-600 font-medium">{formatPrice(minPrice)}</span>
+                        <TableCell className="border-white/10">
+                              <span className="text-white/70 font-medium text-sm">{formatPrice(minPrice)} {tokenInfo.tokenSymbol}</span>
                         </TableCell>
-                        <TableCell className="border-white/20">
+                        <TableCell className="border-white/10">
                           <div className="flex items-center gap-3">
-                            <div className="w-24 h-3 bg-black/10 rounded-full overflow-hidden backdrop-blur-sm">
+                            <div className="w-24 h-3 bg-white/10 rounded-full overflow-hidden backdrop-blur-sm">
                               <motion.div
-                                className="h-full bg-gradient-to-r from-black/60 to-black/80 rounded-full"
+                                className="h-full bg-gradient-to-r from-white/60 to-white/80 rounded-full"
                                 initial={{ width: 0 }}
                                     animate={{ width: `${progress}%` }}
                                 transition={{ duration: 1, delay: index * 0.1 }}
                               />
                             </div>
-                            <span className="text-sm text-gray-600 font-medium">
+                            <span className="text-sm text-white/70 font-medium">
                                   {progress.toFixed(0)}%
                             </span>
                           </div>
+                          <div className="text-xs text-white/60 mt-1">
+                            {auction.auctionType === 'segmented' ? 'Segments' : 'Price Drop'}
+                          </div>
                         </TableCell>
-                        <TableCell className="border-white/20">
+                        <TableCell className="border-white/10">
                           <motion.div whileHover={{ y: -2 }} transition={{ duration: 0.2 }}>
-                                <Badge className={`${getStatusColor(status)} border font-medium backdrop-blur-sm`}>
+                                <Badge className={`${getStatusColor(status)} border font-medium backdrop-blur-sm px-3 py-1`}>
                                   {status.toUpperCase()}
                             </Badge>
                           </motion.div>
                         </TableCell>
-                        <TableCell className="border-white/20">
+                        <TableCell className="border-white/10">
                           <motion.div whileHover={{ x: 3 }} transition={{ duration: 0.2 }}>
                                                          <Button
                                size="sm"
-                               className="bg-black hover:bg-black/80 text-white backdrop-blur-sm border border-black/10 shadow-lg font-medium"
+                               className="bg-white/10 hover:bg-white/20 text-white backdrop-blur-sm border border-white/10 shadow-lg font-medium"
                                onClick={(e) => {
                                  e.stopPropagation()
                                  handleAuctionClick(auction)
@@ -788,7 +810,7 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
               transition={{ type: "spring", stiffness: 300, damping: 30 }}
-              className="relative w-full max-w-md bg-white/90 backdrop-blur-2xl rounded-2xl shadow-2xl border border-white/50 overflow-hidden max-h-[90vh] overflow-y-auto"
+              className="relative w-full max-w-md bg-black/40 backdrop-blur-xl border border-white/10 rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] overflow-y-auto"
             >
               {/* Close Button */}
                              <button
@@ -796,30 +818,30 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
                    setIsModalOpen(false)
                    setSelectedSegmentId(null) // Reset segment selection
                  }}
-                 className="absolute top-4 right-4 z-10 p-2 rounded-full bg-black/5 hover:bg-black/10 transition-colors"
+                 className="absolute top-4 right-4 z-10 p-2 rounded-full bg-white/10 hover:bg-white/20 transition-colors"
                >
-                <X className="w-4 h-4 text-gray-600" />
+                <X className="w-4 h-4 text-white" />
               </button>
 
               {/* Header */}
-              <div className="p-4 border-b border-white/30">
+              <div className="p-4 border-b border-white/10">
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 bg-black/5 backdrop-blur-sm rounded-xl flex items-center justify-center text-black font-bold border border-black/10">
+                  <div className="w-10 h-10 bg-white/10 backdrop-blur-sm rounded-xl flex items-center justify-center text-white font-bold border border-white/10">
                     {selectedAuction.tokenSymbol?.charAt(0) || '?'}
                   </div>
                   <div>
                     <div className="flex items-center gap-2">
-                      <h2 className="text-lg font-bold text-black">{selectedAuction.tokenName}</h2>
-                      <Badge className="bg-blue-50/80 text-blue-700 border-blue-200/50 backdrop-blur-sm text-xs">
+                      <h2 className="text-lg font-bold text-white">{selectedAuction.tokenName}</h2>
+                      <Badge className="bg-blue-500/20 text-blue-300 border-blue-500/30 backdrop-blur-sm text-xs">
                         FUSION SWAP
                       </Badge>
                     </div>
-                    <div className="flex items-center gap-2 text-xs text-gray-600 mt-1">
+                    <div className="flex items-center gap-2 text-xs text-white/70 mt-1">
                       <span>{selectedAuction.fromChain}</span>
                       <ArrowLeftRight className="w-3 h-3" />
                       <span>{selectedAuction.toChain}</span>
                     </div>
-                    <p className="text-xs text-gray-500 font-mono mt-1">{selectedAuction.orderId}</p>
+                    <p className="text-xs text-white/40 font-mono mt-1">{selectedAuction.orderId}</p>
                   </div>
                 </div>
               </div>
@@ -828,50 +850,50 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
               <div className="p-4 space-y-3">
                 {/* Price Cards */}
                 <div className="grid grid-cols-2 gap-2">
-                                     <div className="bg-white/50 backdrop-blur-xl border border-white/50 rounded-lg p-2">
+                                     <div className="bg-black/30 backdrop-blur-xl border border-white/10 rounded-lg p-2">
                      <div className="flex items-center gap-1 mb-1">
-                       <TrendingDown className="w-3 h-3 text-emerald-600" />
-                       <span className="font-medium text-emerald-800 text-xs">Current</span>
-                       <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse ml-1" />
+                       <TrendingDown className="w-3 h-3 text-emerald-400" />
+                       <span className="font-medium text-emerald-300 text-xs">Current</span>
+                       <div className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse ml-1" />
                      </div>
                                          <motion.p
                        key={`price-${selectedAuction.orderId}-${Date.now()}`}
-                       className="text-base font-bold text-black"
+                       className="text-base font-bold text-white"
                        animate={{ opacity: [0.9, 1, 0.9] }}
                        transition={{ duration: 2, repeat: Number.POSITIVE_INFINITY, ease: "easeInOut" }}
                      >
                        {selectedAuction.auctionType === 'single' 
                          ? formatPrice((selectedAuction as SingleAuction).currentPrice)
                          : formatPrice((selectedAuction as SegmentedAuction).segments?.[0]?.currentPrice)
-                       }
+                       } {selectedAuction.tokenSymbol}
                      </motion.p>
                   </div>
 
-                  <div className="bg-white/50 backdrop-blur-xl border border-white/50 rounded-lg p-2">
+                  <div className="bg-black/30 backdrop-blur-xl border border-white/10 rounded-lg p-2">
                     <div className="flex items-center gap-1 mb-1">
-                      <Layers className="w-3 h-3 text-blue-600" />
-                      <span className="font-medium text-blue-800 text-xs">Min</span>
+                      <Layers className="w-3 h-3 text-blue-400" />
+                      <span className="font-medium text-blue-300 text-xs">Min</span>
                     </div>
-                    <p className="text-base font-bold text-black">
+                    <p className="text-base font-bold text-white">
                       {selectedAuction.auctionType === 'single'
                         ? formatPrice((selectedAuction as SingleAuction).minimumPrice)
                         : formatPrice((selectedAuction as SegmentedAuction).minimumPrice)
-                      }
+                      } {selectedAuction.tokenSymbol}
                     </p>
                   </div>
                 </div>
 
                 {/* Auction Details */}
-                <div className="bg-white/50 backdrop-blur-xl border border-white/50 rounded-lg p-3">
+                <div className="bg-black/30 backdrop-blur-xl border border-white/10 rounded-lg p-3">
                   <div className="flex items-center gap-2 mb-2">
-                    <Wallet className="w-4 h-4 text-gray-700" />
-                    <h3 className="font-semibold text-black text-sm">Auction Details</h3>
+                    <Wallet className="w-4 h-4 text-white/70" />
+                    <h3 className="font-semibold text-white text-sm">Auction Details</h3>
                   </div>
 
                                        <div className="space-y-2 text-xs">
                        <div className="flex justify-between">
-                         <span className="text-gray-600">Source Amount:</span>
-                         <span className="font-semibold text-black">
+                         <span className="text-white/60">Source Amount:</span>
+                         <span className="font-semibold text-white">
                            {selectedAuction.auctionType === 'single'
                              ? `${(selectedAuction as SingleAuction).sourceAmount || 0} ${selectedAuction.tokenSymbol || ''}`
                              : `${(selectedAuction as SegmentedAuction).sourceAmount || 0} ${selectedAuction.tokenSymbol || ''}`
@@ -879,17 +901,17 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
                          </span>
                        </div>
                        <div className="flex justify-between">
-                         <span className="text-gray-600">Market Price:</span>
-                         <span className="font-semibold text-black">
+                         <span className="text-white/60">Market Price:</span>
+                         <span className="font-semibold text-white">
                            {selectedAuction.auctionType === 'single'
                              ? formatPrice((selectedAuction as SingleAuction).marketPrice)
                              : formatPrice((selectedAuction as SegmentedAuction).marketPrice)
-                           }
+                           } {selectedAuction.tokenSymbol}
                          </span>
                        </div>
                        <div className="flex justify-between">
-                         <span className="text-gray-600">Slippage:</span>
-                         <span className="font-semibold text-black">
+                         <span className="text-white/60">Slippage:</span>
+                         <span className="font-semibold text-white">
                            {selectedAuction.auctionType === 'single'
                              ? `${(((selectedAuction as SingleAuction).slippage || 0.02) * 100).toFixed(2)}%`
                              : `${(((selectedAuction as SegmentedAuction).slippage || 0.02) * 100).toFixed(2)}%`
@@ -901,9 +923,9 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
 
                                  {/* Segments for Partial Fill Auctions */}
                  {selectedAuction.auctionType === 'segmented' && (
-                   <div className="bg-white/50 backdrop-blur-xl border border-white/50 rounded-lg p-3">
-                     <h4 className="font-semibold text-black text-sm mb-2 flex items-center gap-2">
-                       <Layers className="w-4 h-4 text-purple-500" />
+                   <div className="bg-black/30 backdrop-blur-xl border border-white/10 rounded-lg p-3">
+                     <h4 className="font-semibold text-white text-sm mb-2 flex items-center gap-2">
+                       <Layers className="w-4 h-4 text-purple-400" />
                        Select a Segment to Resolve
                      </h4>
                      <div className="grid grid-cols-2 gap-2">
@@ -912,10 +934,10 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
                            key={segment.id} 
                            className={`backdrop-blur-sm rounded-lg p-2 border cursor-pointer transition-all duration-200 ${
                              selectedSegmentId === segment.id 
-                               ? 'bg-purple-100/80 border-purple-300 shadow-lg' 
+                               ? 'bg-purple-500/20 border-purple-500/30 shadow-lg' 
                                : segment.status === 'active'
-                               ? 'bg-black/5 border-black/10 hover:bg-purple-50/50'
-                               : 'bg-gray-100/50 border-gray-200 opacity-50 cursor-not-allowed'
+                               ? 'bg-white/10 border-white/10 hover:bg-purple-500/20'
+                               : 'bg-white/5 border-white/5 opacity-50 cursor-not-allowed'
                            }`}
                            onClick={() => {
                              if (segment.status === 'active') {
@@ -926,17 +948,17 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
                            whileTap={segment.status === 'active' ? { scale: 0.98 } : {}}
                          >
                            <div className="flex items-center justify-between mb-1">
-                             <span className="text-xs font-medium text-gray-600">Segment {segment.id}</span>
+                             <span className="text-xs font-medium text-white/70">Segment {segment.id}</span>
                              <div className="flex items-center gap-1">
                                {selectedSegmentId === segment.id && (
-                                 <CheckCircle className="w-3 h-3 text-purple-600" />
+                                 <CheckCircle className="w-3 h-3 text-purple-400" />
                                )}
                                <Badge className={`${
                                  segment.status === "active" 
-                                   ? "bg-green-50/80 text-green-700 border-green-200/50" 
+                                   ? "bg-green-500/20 text-green-300 border-green-500/30" 
                                    : segment.status === "completed"
-                                   ? "bg-blue-50/80 text-blue-700 border-blue-200/50"
-                                   : "bg-gray-50/80 text-gray-700 border-gray-200/50"
+                                   ? "bg-blue-500/20 text-blue-300 border-blue-500/30"
+                                   : "bg-gray-500/20 text-gray-300 border-gray-500/30"
                                } text-xs`}>
                                  {segment.status.toUpperCase()}
                                </Badge>
@@ -944,28 +966,28 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
                            </div>
                            <div className="space-y-1">
                              <div className="flex justify-between text-xs">
-                               <span className="text-gray-600">Current:</span>
+                               <span className="text-white/60">Current:</span>
                                <motion.span 
                                  key={`segment-${segment.id}-price-${Date.now()}`}
-                                 className="font-semibold text-black"
+                                 className="font-semibold text-white"
                                  animate={{ opacity: [0.8, 1, 0.8] }}
                                  transition={{ duration: 1, repeat: Number.POSITIVE_INFINITY }}
                                >
-                                 {formatPrice(segment.currentPrice)}
+                                 {formatPrice(segment.currentPrice)} {selectedAuction.tokenSymbol}
                                </motion.span>
                              </div>
                              <div className="flex justify-between text-xs">
-                               <span className="text-gray-600">Min:</span>
-                               <span className="font-semibold text-black">{formatPrice(segment.endPrice)}</span>
+                               <span className="text-white/60">Min:</span>
+                               <span className="font-semibold text-white">{formatPrice(segment.endPrice)} {selectedAuction.tokenSymbol}</span>
                              </div>
                              <div className="flex justify-between text-xs">
-                               <span className="text-gray-600">Amount:</span>
-                               <span className="font-semibold text-black">{(segment.amount || 0).toFixed(4)}</span>
+                               <span className="text-white/60">Amount:</span>
+                               <span className="font-semibold text-white">{(segment.amount || 0).toFixed(4)} {selectedAuction.tokenSymbol}</span>
                              </div>
                              {segment.winner && (
                                <div className="flex justify-between text-xs">
-                                 <span className="text-gray-600">Winner:</span>
-                                 <span className="font-semibold text-green-600">{segment.winner.slice(0, 8)}...</span>
+                                 <span className="text-white/60">Winner:</span>
+                                 <span className="font-semibold text-green-400">{segment.winner.slice(0, 8)}...</span>
                                </div>
                              )}
                            </div>
@@ -973,8 +995,8 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
                        ))}
                      </div>
                      {selectedSegmentId && (
-                       <div className="mt-3 p-2 bg-purple-50/80 rounded-lg border border-purple-200/50">
-                         <p className="text-xs text-purple-700 font-medium">
+                       <div className="mt-3 p-2 bg-purple-500/20 rounded-lg border border-purple-500/30">
+                         <p className="text-xs text-purple-300 font-medium">
                            ✅ Selected Segment {selectedSegmentId} - Click "Confirm as Winner" to resolve this segment
                          </p>
                        </div>
@@ -985,7 +1007,7 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
                 {/* Action Button */}
                 <motion.div whileHover={{ y: -2 }} whileTap={{ y: 1 }}>
                                      <Button
-                     className="w-full h-10 bg-black hover:bg-black/90 text-white font-bold backdrop-blur-sm border border-black/10 shadow-xl rounded-lg disabled:bg-gray-400 disabled:cursor-not-allowed"
+                     className="w-full h-10 bg-white/10 hover:bg-white/20 text-white font-bold backdrop-blur-sm border border-white/10 shadow-xl rounded-lg disabled:bg-white/5 disabled:cursor-not-allowed"
                      onClick={() => {
                        handleResolveAuction(selectedAuction)
                      }}
@@ -1012,18 +1034,18 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
 
        {/* Confirmation Modal */}
        <Dialog open={isConfirmModalOpen} onOpenChange={setIsConfirmModalOpen}>
-         <DialogContent className="max-w-md bg-white/95 backdrop-blur-2xl border border-white/50">
+         <DialogContent className="max-w-md bg-black/40 backdrop-blur-xl border border-white/10">
            <DialogHeader>
-             <DialogTitle className="text-xl font-bold text-black">Confirm Resolution</DialogTitle>
+             <DialogTitle className="text-xl font-bold text-white">Confirm Resolution</DialogTitle>
            </DialogHeader>
            <div className="space-y-4">
-             <p className="text-gray-700">
+             <p className="text-white/80">
                {pendingConfirmation?.auctionType === 'segmented' 
                  ? `Are you sure you want to resolve segment ${selectedSegmentId} of auction ${pendingConfirmation?.orderId.slice(0, 8)}...?`
                  : `Are you sure you want to resolve auction ${pendingConfirmation?.orderId.slice(0, 8)}...?`
                }
              </p>
-             <p className="text-sm text-gray-600">
+             <p className="text-sm text-white/60">
                {pendingConfirmation?.auctionType === 'segmented'
                  ? `This will declare you as the winner of segment ${selectedSegmentId} and complete that segment.`
                  : `This will declare you as the winner and complete the auction.`
@@ -1032,13 +1054,13 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
              <div className="flex gap-3 pt-4">
                <Button
                  variant="outline"
-                 className="flex-1 border-gray-300 text-gray-700 hover:bg-gray-50"
+                 className="flex-1 border-white/20 text-white/80 hover:bg-white/10"
                  onClick={() => setIsConfirmModalOpen(false)}
                >
                  Cancel
                </Button>
                <Button
-                 className="flex-1 bg-black hover:bg-black/80 text-white"
+                 className="flex-1 bg-white/10 hover:bg-white/20 text-white border border-white/10"
                  onClick={handleConfirmResolution}
                >
                  Confirm
