@@ -61,6 +61,15 @@ class DutchAuctionServer {
           this.handleClientMessage(ws, data);
         } catch (error) {
           console.error('❌ Invalid message received:', error);
+          // Send error response to client
+          try {
+            ws.send(JSON.stringify({
+              type: 'error',
+              message: 'Invalid message format'
+            }));
+          } catch (sendError) {
+            console.error('❌ Failed to send error response:', sendError);
+          }
         }
       });
       
@@ -81,7 +90,8 @@ class DutchAuctionServer {
   }
   
   handleClientMessage(ws, data) {
-    switch (data.type) {
+    try {
+      switch (data.type) {
       case 'register':
         this.clients.set(data.name, ws);
         console.log(`📝 Auction client registered: ${data.name}`);
@@ -89,23 +99,37 @@ class DutchAuctionServer {
         
       case 'request_active_auctions':
         // Send list of currently active auctions to the client
-        const activeAuctionsList = Array.from(this.activeAuctions.values()).map(auction => ({
-          orderId: auction.orderId,
-          auctionType: auction.auctionType,
-          currentPrice: auction.currentPrice || auction.segments?.[0]?.currentPrice,
-          startPrice: auction.startPrice || auction.segments?.[0]?.startPrice,
-          endPrice: auction.endPrice || auction.minimumPrice,
-          minimumPrice: auction.minimumPrice,
-          sourceAmount: auction.sourceAmount,
-          marketPrice: auction.marketPrice,
-          slippage: auction.slippage,
-          winner: auction.winner,
-          status: auction.status || 'active',
-          endTime: auction.endTime,
-          segments: auction.segments,
-          totalWinners: auction.totalWinners,
-          intervals: auction.intervals
-        }));
+        const activeAuctionsList = Array.from(this.activeAuctions.values()).map(auction => {
+          // Create a clean object without circular references
+          const cleanAuction = {
+            orderId: auction.orderId,
+            auctionType: auction.auctionType,
+            currentPrice: auction.currentPrice || auction.segments?.[0]?.currentPrice,
+            startPrice: auction.startPrice || auction.segments?.[0]?.startPrice,
+            endPrice: auction.endPrice || auction.minimumPrice,
+            minimumPrice: auction.minimumPrice,
+            sourceAmount: auction.sourceAmount,
+            marketPrice: auction.marketPrice,
+            slippage: auction.slippage,
+            winner: auction.winner,
+            status: auction.status || 'active',
+            endTime: auction.endTime,
+            segments: auction.segments ? auction.segments.map(segment => ({
+              id: segment.id,
+              amount: segment.amount,
+              startPrice: segment.startPrice,
+              endPrice: segment.endPrice,
+              currentPrice: segment.currentPrice,
+              winner: segment.winner,
+              status: segment.status,
+              endTime: segment.endTime
+              // Don't include interval or other circular references
+            })) : [],
+            totalWinners: auction.totalWinners || [],
+            // Don't include intervals array as it contains circular references
+          };
+          return cleanAuction;
+        });
         
         ws.send(JSON.stringify({
           type: 'active_auctions_received',
@@ -235,6 +259,17 @@ class DutchAuctionServer {
           }));
         }
         break;
+      }
+    } catch (error) {
+      console.error('❌ Error handling client message:', error);
+      try {
+        ws.send(JSON.stringify({
+          type: 'error',
+          message: 'Internal server error'
+        }));
+      } catch (sendError) {
+        console.error('❌ Failed to send error response:', sendError);
+      }
     }
   }
   

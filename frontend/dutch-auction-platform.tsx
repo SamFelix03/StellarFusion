@@ -152,8 +152,10 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
       if (activeAuctions && activeAuctions.length > 0) {
         // Convert server auction data to our format
         const convertedAuctions: Auction[] = activeAuctions.map((serverAuction: any) => {
+          console.log('🔍 Processing server auction:', serverAuction.orderId, 'Type:', serverAuction.auctionType)
+          
           if (serverAuction.auctionType === 'segmented') {
-            return {
+            const segmentedAuction: SegmentedAuction = {
               orderId: serverAuction.orderId,
               orderType: 'partialfill',
               auctionType: 'segmented',
@@ -163,10 +165,12 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
               sourceAmount: serverAuction.sourceAmount,
               slippage: serverAuction.slippage,
               minimumPrice: serverAuction.minimumPrice,
-              intervals: serverAuction.intervals || []
-            } as SegmentedAuction
+              intervals: []
+            }
+            console.log('📊 Converted to segmented auction with segments:', segmentedAuction.segments.length)
+            return segmentedAuction
           } else {
-            return {
+            const singleAuction: SingleAuction = {
               orderId: serverAuction.orderId,
               orderType: 'normal',
               auctionType: 'single',
@@ -180,7 +184,9 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
               winner: serverAuction.winner,
               status: serverAuction.status || 'active',
               endTime: serverAuction.endTime
-            } as SingleAuction
+            }
+            console.log('📊 Converted to single auction')
+            return singleAuction
           }
         })
         
@@ -250,6 +256,8 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
   }, [isConnected])
 
   const handleAuctionClick = (auction: Auction) => {
+    console.log('🔍 Auction clicked:', auction.orderId, 'Type:', auction.auctionType)
+    
     // Determine token info based on order data
     const tokenInfo = getTokenInfo(auction)
     
@@ -264,6 +272,12 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
       fromChain: tokenInfo.fromChain,
       toChain: tokenInfo.toChain,
     }
+    
+    console.log('📊 Auction details:', details)
+    if (details.auctionType === 'segmented') {
+      console.log('📊 Segments in details:', (details as SegmentedAuction).segments)
+    }
+    
     setSelectedAuction(details)
     setSelectedSegmentId(null) // Reset segment selection
     setIsModalOpen(true)

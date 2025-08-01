@@ -221,26 +221,26 @@ class DutchAuctionClient implements AuctionClient {
         })
         break
 
-      case 'new_segmented_auction':
-        console.log('🚀 New segmented auction started:', data.orderId)
-        console.log('📊 Segmented auction data:', data)
-        this.newAuctionCallbacks.forEach(callback => {
-          const auction: SegmentedAuction = {
-            orderId: data.orderId,
-            orderType: 'partialfill',
-            auctionType: 'segmented',
-            segments: data.segments,
-            totalWinners: [],
-            marketPrice: data.marketPrice,
-            sourceAmount: data.sourceAmount,
-            slippage: data.slippage,
-            minimumPrice: data.minimumPrice,
-            intervals: []
-          }
-          console.log('📤 Calling newAuction callback with:', auction)
-          callback(auction)
-        })
-        break
+             case 'new_segmented_auction':
+         console.log('🚀 New segmented auction started:', data.orderId)
+         console.log('📊 Segmented auction data:', data)
+         this.newAuctionCallbacks.forEach(callback => {
+           const auction: SegmentedAuction = {
+             orderId: data.orderId,
+             orderType: 'partialfill',
+             auctionType: 'segmented',
+             segments: data.segments || [],
+             totalWinners: [],
+             marketPrice: data.marketPrice,
+             sourceAmount: data.sourceAmount,
+             slippage: data.slippage,
+             minimumPrice: data.minimumPrice,
+             intervals: []
+           }
+           console.log('📤 Calling newAuction callback with:', auction)
+           callback(auction)
+         })
+         break
 
       case 'single_auction_update':
         console.log('📊 Single auction update:', data.orderId, 'Price:', data.currentPrice)
