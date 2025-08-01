@@ -21,10 +21,19 @@ import {
   Timer,
   Hash,
   Key,
-  Trophy
+  Trophy,
+  Sparkles,
+  Target,
+  Building2,
+  Lock,
+  Unlock,
+  ArrowUpDown
 } from 'lucide-react'
 import { useWallet } from '@/components/WalletProvider'
 import { toast } from '@/hooks/use-toast'
+import { resolverContractManager, ResolverOrderExecution } from '@/lib/resolver-contracts'
+import { useWalletClient } from 'wagmi'
+import { ethers } from 'ethers'
 
 interface ResolverExecutionModalProps {
   isOpen: boolean
@@ -40,6 +49,9 @@ interface ExecutionStep {
   status: 'pending' | 'in-progress' | 'completed' | 'failed'
   details?: any
   error?: string
+  transactionHash?: string
+  escrowAddress?: string
+  icon: React.ReactNode
 }
 
 export default function ResolverExecutionModal({ 
@@ -49,31 +61,21 @@ export default function ResolverExecutionModal({
   onExecutionComplete 
 }: ResolverExecutionModalProps) {
   const { address, stellarWallet } = useWallet()
+  const { data: walletClient } = useWalletClient()
   const [currentStep, setCurrentStep] = useState(0)
   const [executionSteps, setExecutionSteps] = useState<ExecutionStep[]>([])
   const [isExecuting, setIsExecuting] = useState(false)
   const [executionDetails, setExecutionDetails] = useState<any>(null)
 
-  // Initialize execution steps for winner declaration
+  // Initialize execution steps for complete resolver workflow
   const initializeExecutionSteps = () => {
     const steps: ExecutionStep[] = [
       {
-        id: 'winner-declaration',
-        title: 'Winner Declaration',
-        description: 'Declaring resolver as the winner of the auction',
-        status: 'pending'
-      },
-      {
-        id: 'confirmation',
-        title: 'Confirmation',
-        description: 'Confirming winner status and preparing for next steps',
-        status: 'pending'
-      },
-      {
-        id: 'completion',
-        title: 'Completion',
-        description: 'Winner declaration completed successfully',
-        status: 'pending'
+        id: 'resolver-execution',
+        title: 'Resolver Execution',
+        description: 'Executing complete resolver workflow with real transactions',
+        status: 'pending',
+        icon: <Zap className="w-5 h-5" />
       }
     ]
     setExecutionSteps(steps)
@@ -112,28 +114,101 @@ export default function ResolverExecutionModal({
     })
   }
 
-  // Execute winner declaration workflow
-  const executeWinnerDeclarationWorkflow = async () => {
+  // Execute complete resolver workflow using the new integrated flow
+  const executeResolverWorkflow = async () => {
     if (!auction) return
 
     setIsExecuting(true)
+    updateStepStatus('resolver-execution', 'in-progress')
     
     try {
-      // Step 1: Winner Declaration
-      await executeWinnerDeclarationStep()
+      // Get resolver address based on source chain (user is the resolver)
+      const sourceChain = mapChainName(auction.fromChain)
+      const destinationChain = mapChainName(auction.toChain)
       
-      // Step 2: Confirmation
-      await executeConfirmationStep()
+      const resolverAddress = resolverContractManager.getResolverAddress(
+        sourceChain,
+        address, // MetaMask address for EVM chains
+        stellarWallet?.publicKey // Freighter address for Stellar
+      )
       
-      // Step 3: Completion
-      await executeCompletionStep()
+      if (!resolverAddress) {
+        throw new Error('No resolver address available. Please connect your wallet.')
+      }
       
-      onExecutionComplete()
+      console.log(`🔗 Using resolver address: ${resolverAddress} for chain: ${sourceChain}`)
+      
+      // Create real signer objects
+      let evmSigner: ethers.Signer | undefined = undefined
+      let stellarSecretKey: string | undefined = undefined
+      
+      // Get EVM signer if needed (for EVM chains)
+      if (sourceChain !== 'stellar-testnet' || destinationChain !== 'stellar-testnet') {
+        if (!walletClient || !address) {
+          throw new Error('MetaMask wallet not connected for EVM operations')
+        }
+        
+        // Convert wagmi wallet client to ethers signer
+        const provider = new ethers.providers.Web3Provider(walletClient.transport)
+        evmSigner = provider.getSigner()
+        console.log('🔗 Created EVM signer from connected wallet')
+      }
+      
+      // Get Stellar credentials if needed
+      if (sourceChain === 'stellar-testnet' || destinationChain === 'stellar-testnet') {
+        if (!stellarWallet?.publicKey) {
+          throw new Error('Freighter wallet not connected for Stellar operations')
+        }
+        
+        console.log('🌟 Stellar wallet connected for operations')
+        stellarSecretKey = stellarWallet.publicKey
+      }
+      
+      const orderExecution: ResolverOrderExecution = {
+        orderId: auction.orderId,
+        sourceChain,
+        destinationChain,
+        sourceToken: auction.tokenSymbol || 'ETH',
+        destinationToken: auction.tokenName || 'XLM',
+        sourceAmount: auction.sourceAmount?.toString() || '0',
+        destinationAmount: auction.currentPrice?.toString() || '0',
+        buyerAddress: auction.buyerAddress || '',
+        resolverAddress,
+        hashedSecret: generateMockHashedSecret(),
+        isPartialFill: auction.auctionType === 'segmented',
+        segmentIndex: 0,
+        totalParts: auction.auctionType === 'segmented' ? (auction.segments?.length || 1) : 1,
+        evmSigner,
+        stellarKeypair: stellarWallet,
+        stellarSecretKey
+      }
+      
+      // Execute the complete resolver flow with progress updates
+      const result = await resolverContractManager.executeCompleteResolverFlow(
+        orderExecution,
+        (step, status, details) => {
+          console.log(`📊 Progress update: ${step} - ${status}`, details)
+          updateStepStatus('resolver-execution', status, details)
+        }
+      )
+      
+      if (!result.success) {
+        throw new Error(result.error || 'Resolver flow failed')
+      }
+      
+      updateStepStatus('resolver-execution', 'completed', {
+        success: true,
+        message: 'Resolver workflow completed successfully',
+        timestamp: new Date().toISOString()
+      })
+      
+      console.log('🎉 Complete resolver workflow executed successfully!')
       
     } catch (error) {
-      console.error('❌ Winner declaration workflow failed:', error)
+      console.error('❌ Resolver workflow failed:', error)
+      updateStepStatus('resolver-execution', 'failed', undefined, error instanceof Error ? error.message : 'Unknown error')
       toast({
-        title: "Declaration Failed",
+        title: "Resolver Execution Failed",
         description: error instanceof Error ? error.message : "Unknown error occurred",
         variant: "destructive"
       })
@@ -142,88 +217,29 @@ export default function ResolverExecutionModal({
     }
   }
 
-  const executeWinnerDeclarationStep = async () => {
-    updateStepStatus('winner-declaration', 'in-progress')
-    
-    try {
-      console.log('🏆 Starting winner declaration step with auction:', auction)
-      
-      // Simulate processing time
-      await new Promise(resolve => setTimeout(resolve, 2000))
-      
-      // Update with success details
-      updateStepStatus('winner-declaration', 'completed', {
-        orderId: auction.orderId,
-        winnerAddress: getWalletAddress(address ? { address } : stellarWallet),
-        auctionType: auction.auctionType,
-        finalPrice: auction.currentPrice || auction.finalPrice
-      })
-      
-    } catch (error) {
-      console.error('❌ Error in winner declaration step:', error)
-      updateStepStatus('winner-declaration', 'failed', undefined, error instanceof Error ? error.message : 'Unknown error')
-      throw error
-    }
-  }
-
-  const executeConfirmationStep = async () => {
-    updateStepStatus('confirmation', 'in-progress')
-    
-    try {
-      console.log('✅ Starting confirmation step...')
-      
-      // Simulate processing time
-      await new Promise(resolve => setTimeout(resolve, 1500))
-      
-      // Update with confirmation details
-      updateStepStatus('confirmation', 'completed', {
-        confirmed: true,
-        timestamp: new Date().toISOString(),
-        orderId: auction.orderId
-      })
-      
-    } catch (error) {
-      console.error('❌ Error in confirmation step:', error)
-      updateStepStatus('confirmation', 'failed', undefined, error instanceof Error ? error.message : 'Unknown error')
-      throw error
-    }
-  }
-
-  const executeCompletionStep = async () => {
-    updateStepStatus('completion', 'in-progress')
-    
-    try {
-      console.log('🎉 Starting completion step...')
-      
-      // Simulate processing time
-    await new Promise(resolve => setTimeout(resolve, 1000))
-    
-      // Update with completion details
-      updateStepStatus('completion', 'completed', {
-        completed: true,
-        timestamp: new Date().toISOString(),
-        orderId: auction.orderId,
-        winnerAddress: getWalletAddress(address ? { address } : stellarWallet)
-      })
-      
-    } catch (error) {
-      console.error('❌ Error in completion step:', error)
-      updateStepStatus('completion', 'failed', undefined, error instanceof Error ? error.message : 'Unknown error')
-      throw error
-    }
-  }
-
-  // Get step icon
+  // Get step icon with status
   const getStepIcon = (step: ExecutionStep) => {
+    const baseIcon = step.icon
+    
     switch (step.status) {
       case 'completed':
-        return <CheckCircle className="w-5 h-5 text-green-500" />
+        return <div className="w-10 h-10 rounded-full bg-green-500/20 border border-green-500/30 flex items-center justify-center">
+          <CheckCircle className="w-5 h-5 text-green-400" />
+        </div>
       case 'in-progress':
-        return <Loader2 className="w-5 h-5 text-blue-500 animate-spin" />
+        return <div className="w-10 h-10 rounded-full bg-blue-500/20 border border-blue-500/30 flex items-center justify-center">
+          <Loader2 className="w-5 h-5 text-blue-400 animate-spin" />
+        </div>
       case 'failed':
-        return <AlertCircle className="w-5 h-5 text-red-500" />
+        return <div className="w-10 h-10 rounded-full bg-red-500/20 border border-red-500/30 flex items-center justify-center">
+          <AlertCircle className="w-5 h-5 text-red-400" />
+        </div>
       default:
-        return <Clock className="w-5 h-5 text-gray-400" />
+        return <div className="w-10 h-10 rounded-full bg-white/10 border border-white/20 flex items-center justify-center">
+          <div className="w-5 h-5 text-white/60">
+            {baseIcon}
+          </div>
+        </div>
     }
   }
 
@@ -231,13 +247,27 @@ export default function ResolverExecutionModal({
   const getStepStatusColor = (step: ExecutionStep) => {
     switch (step.status) {
       case 'completed':
-        return 'text-green-600'
+        return 'text-green-400'
       case 'in-progress':
-        return 'text-blue-600'
+        return 'text-blue-400'
       case 'failed':
-        return 'text-red-600'
+        return 'text-red-400'
       default:
-        return 'text-gray-500'
+        return 'text-white/60'
+    }
+  }
+
+  // Get step background color
+  const getStepBgColor = (step: ExecutionStep) => {
+    switch (step.status) {
+      case 'completed':
+        return 'bg-green-500/10 border-green-500/20'
+      case 'in-progress':
+        return 'bg-blue-500/10 border-blue-500/20'
+      case 'failed':
+        return 'bg-red-500/10 border-red-500/20'
+      default:
+        return 'bg-black/30 border-white/10'
     }
   }
 
@@ -254,102 +284,133 @@ export default function ResolverExecutionModal({
   // Start execution when modal opens
   useEffect(() => {
     if (isOpen && !isExecuting) {
-      executeWinnerDeclarationWorkflow()
+      executeResolverWorkflow()
     }
   }, [isOpen])
 
+  // Helper functions
+  const mapChainName = (chainDisplayName: string): string => {
+    const mapping: { [key: string]: string } = {
+      'Sepolia Testnet': 'sepolia',
+      'Stellar Testnet': 'stellar-testnet'
+    }
+    return mapping[chainDisplayName] || 'sepolia'
+  }
+  
+  const generateMockHashedSecret = (): string => {
+    return '0x' + Math.random().toString(16).substr(2, 64)
+  }
+
+  const handleSecretReceived = async (secret: string) => {
+    console.log('🔐 Secret received from buyer:', secret.slice(0, 10) + '...')
+    // The secret handling is now done within the resolver contract manager
+    console.log('✅ Secret processing completed')
+  }
+
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="bg-black/40 backdrop-blur-xl border border-white/10 max-w-4xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Trophy className="w-6 h-6 text-yellow-500" />
-            Winner Declaration
+          <DialogTitle className="flex items-center gap-3 text-white text-xl">
+            <div className="w-8 h-8 rounded-full bg-yellow-500/20 border border-yellow-500/30 flex items-center justify-center">
+              <Trophy className="w-5 h-5 text-yellow-400" />
+            </div>
+            <span>Winner Declaration</span>
+            <Sparkles className="w-5 h-5 text-yellow-400" />
           </DialogTitle>
         </DialogHeader>
 
         <div className="space-y-6">
           {/* Auction Information */}
-          <div className="bg-gradient-to-r from-purple-50 to-blue-50 p-4 rounded-lg border border-purple-200">
-            <h3 className="font-semibold text-purple-900 mb-2">Auction Details</h3>
+          <div className="bg-black/30 backdrop-blur-sm border border-white/10 rounded-2xl p-6">
+            <div className="flex items-center gap-3 mb-4">
+              <Target className="w-5 h-5 text-blue-400" />
+              <h3 className="text-white font-semibold text-lg">Auction Details</h3>
+            </div>
             <div className="grid grid-cols-2 gap-4 text-sm">
-              <div>
-                <span className="text-gray-600">Order ID:</span>
-                <div className="font-mono text-purple-700">{auction?.orderId || 'N/A'}</div>
+              <div className="bg-black/20 rounded-lg p-3">
+                <span className="text-white/60 text-xs uppercase tracking-wide">Order ID</span>
+                <div className="font-mono text-white text-sm mt-1">{auction?.orderId || 'N/A'}</div>
               </div>
-              <div>
-                <span className="text-gray-600">Auction Type:</span>
-                <div className="font-medium text-purple-700">{auction?.auctionType || 'N/A'}</div>
+              <div className="bg-black/20 rounded-lg p-3">
+                <span className="text-white/60 text-xs uppercase tracking-wide">Auction Type</span>
+                <div className="font-medium text-white text-sm mt-1">{auction?.auctionType || 'N/A'}</div>
               </div>
-              <div>
-                <span className="text-gray-600">Winner Address:</span>
-                <div className="font-mono text-purple-700">
+              <div className="bg-black/20 rounded-lg p-3">
+                <span className="text-white/60 text-xs uppercase tracking-wide">Winner Address</span>
+                <div className="font-mono text-white text-sm mt-1">
                   {formatAddress(getWalletAddress(address ? { address } : stellarWallet))}
                 </div>
               </div>
-              <div>
-                <span className="text-gray-600">Final Price:</span>
-                <div className="font-medium text-purple-700">{auction?.currentPrice || auction?.finalPrice || 'N/A'}</div>
+              <div className="bg-black/20 rounded-lg p-3">
+                <span className="text-white/60 text-xs uppercase tracking-wide">Final Price</span>
+                <div className="font-medium text-white text-sm mt-1">{auction?.currentPrice || auction?.finalPrice || 'N/A'}</div>
               </div>
             </div>
           </div>
 
           {/* Execution Steps */}
           <div className="space-y-4">
-            <h3 className="font-semibold text-gray-900">Winner Declaration Progress</h3>
-              {executionSteps.map((step, index) => (
-                <motion.div
-                  key={step.id}
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: index * 0.1 }}
-                className={`p-4 rounded-lg border ${
-                  step.status === 'completed' ? 'bg-green-50 border-green-200' :
-                  step.status === 'in-progress' ? 'bg-blue-50 border-blue-200' :
-                  step.status === 'failed' ? 'bg-red-50 border-red-200' :
-                  'bg-gray-50 border-gray-200'
-                }`}
-                >
-                  <div className="flex items-center gap-3">
-                    {getStepIcon(step)}
-                    <div className="flex-1">
-                    <h4 className={`font-medium ${getStepStatusColor(step)}`}>
+            <div className="flex items-center gap-3 mb-4">
+              <ArrowUpDown className="w-5 h-5 text-purple-400" />
+              <h3 className="text-white font-semibold text-lg">Execution Progress</h3>
+            </div>
+            {executionSteps.map((step, index) => (
+              <motion.div
+                key={step.id}
+                initial={{ opacity: 0, x: -20 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ delay: index * 0.1 }}
+                className={`p-4 rounded-2xl border backdrop-blur-sm ${getStepBgColor(step)}`}
+              >
+                <div className="flex items-start gap-4">
+                  {getStepIcon(step)}
+                  <div className="flex-1">
+                    <h4 className={`font-semibold ${getStepStatusColor(step)}`}>
                       {step.title}
                     </h4>
-                    <p className="text-sm text-gray-600 mt-1">
+                    <p className="text-sm text-white/70 mt-1">
                       {step.description}
                     </p>
-                      {step.details && (
-                        <div className="mt-2 text-xs text-gray-500">
-                        <pre className="whitespace-pre-wrap">
-                          {JSON.stringify(step.details, null, 2)}
-                        </pre>
+                    {step.details && (
+                      <div className="mt-3 p-3 bg-black/20 rounded-lg">
+                        <div className="text-xs text-white/60 mb-2">Details:</div>
+                        <div className="text-xs text-white/80 font-mono">
+                          {Object.entries(step.details).map(([key, value]) => (
+                            <div key={key} className="flex justify-between">
+                              <span className="text-white/60">{key}:</span>
+                              <span className="text-white">{String(value)}</span>
+                            </div>
+                          ))}
                         </div>
-                      )}
-                      {step.error && (
-                      <div className="mt-2 text-xs text-red-500">
-                        Error: {step.error}
-                    </div>
+                      </div>
+                    )}
+                    {step.error && (
+                      <div className="mt-3 p-3 bg-red-500/10 border border-red-500/20 rounded-lg">
+                        <div className="text-xs text-red-400 font-medium">Error:</div>
+                        <div className="text-xs text-red-300 mt-1">{step.error}</div>
+                      </div>
                     )}
                   </div>
-                  </div>
-                </motion.div>
-              ))}
+                </div>
+              </motion.div>
+            ))}
           </div>
 
           {/* Action Buttons */}
-          <div className="flex justify-end gap-3 pt-4 border-t">
+          <div className="flex justify-end gap-3 pt-6 border-t border-white/10">
             <Button
               variant="outline"
               onClick={onClose}
               disabled={isExecuting}
+              className="border-white/20 text-white hover:bg-white/10"
             >
               Close
             </Button>
-            {executionSteps.every(step => step.status === 'completed') && (
-            <Button
+            {executionSteps.find(step => step.id === 'resolver-execution')?.status === 'completed' && (
+              <Button
                 onClick={onExecutionComplete}
-                className="bg-green-600 hover:bg-green-700"
+                className="bg-green-600 hover:bg-green-700 text-white"
               >
                 <CheckCircle className="w-4 h-4 mr-2" />
                 Complete

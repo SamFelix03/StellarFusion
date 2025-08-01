@@ -29,6 +29,7 @@ import LoadingModal from "./LoadingModal"
 import { createOrder, sendOrderToRelayer, prepareBuyer, prepareStellarBuyer, shareSecretsWithRelayer, shareSegmentSecret, OrderData } from "@/lib/order-utils"
 import OrderProgressModal from "./OrderProgressModal"
 import { OrderProgress } from "./OrderProgressModal"
+import { useOrderProgress } from "@/hooks/useOrderProgress"
 import { toast } from "@/components/ui/use-toast"
 
 interface Token {
@@ -177,6 +178,16 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
   const [currentOrder, setCurrentOrder] = useState<OrderProgress | null>(null)
   const [showOrderProgress, setShowOrderProgress] = useState(false)
   const [orderDataMap, setOrderDataMap] = useState<Map<string, OrderData>>(new Map())
+
+  // Use the real-time order progress hook
+  const { orderProgress, setOrderProgress } = useOrderProgress(currentOrder?.orderId || null)
+
+  // Update current order when real-time progress is received
+  useEffect(() => {
+    if (orderProgress && currentOrder) {
+      setCurrentOrder(orderProgress)
+    }
+  }, [orderProgress, currentOrder])
 
   // Fetch real ETH balance using wagmi
   const { data: ethBalance } = useBalance({
@@ -404,20 +415,12 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
       setShowLoadingModal(true)
       setLoadingStep(1) // Step 1: Order creation
       
-      // Convert token symbol to the correct format for order creation
-      const getTokenKey = (token: Token) => {
-        if (token.symbol === "ETH" || token.symbol === "WETH") return "eth"
-        if (token.symbol === "XLM") return "xlm"
-        if (token.symbol === "USDC") return "usdc"
-        return token.symbol.toLowerCase().replace(' ', '-')
-      }
-      
       const orderData = createOrder({
         buyerAddress: address || stellarWallet?.publicKey || "",
-        sourceChain: swapState.fromChain.toLowerCase(),
-        destinationChain: swapState.toChain.toLowerCase(),
-        sourceToken: getTokenKey(swapState.fromToken),
-        destinationToken: swapState.toToken.symbol,
+        sourceChain: swapState.fromChain,
+        destinationChain: swapState.toChain,
+        sourceToken: swapState.fromToken?.symbol || "",
+        destinationToken: swapState.toToken?.symbol || "",
         sourceAmount: swapState.fromAmount,
         destinationAmount: swapState.toAmount,
         enablePartialFills: enablePartialFills,
@@ -460,7 +463,7 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
         }
         
         await prepareBuyer(
-          orderData.srcChainId as string,
+          swapState.fromChain, // Use the actual chain name instead of chain ID
           orderData.srcToken as string,
           orderData.srcAmount as string,
           walletClient
@@ -497,14 +500,18 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
       const orderProgress: OrderProgress = {
         orderId: orderData.orderId,
         orderType: orderData.isPartialFillEnabled ? 'partial' : 'single',
-        status: 'created',
-        totalAmount: orderData.srcAmount as string,
+        status: 'auction_started', // Start with auction
+        // Source amounts (what user is paying)
+        sourceAmount: orderData.srcAmount as string,
+        sourceToken: orderData.srcToken as string,
+        sourceChain: orderData.srcChainId as string,
+        // Destination amounts (what user is receiving)
+        destinationAmount: orderData.dstAmount as string,
+        destinationToken: orderData.dstToken as string,
+        destinationChain: orderData.dstChainId as string,
+        // Progress tracking
         filledAmount: '0',
         fillPercentage: 0,
-        sourceToken: orderData.srcToken as string,
-        destinationToken: orderData.dstToken as string,
-        sourceChain: orderData.srcChainId as string,
-        destinationChain: orderData.dstChainId as string,
         buyerAddress: orderData.buyerAddress as string,
         hashedSecret: orderData.hashedSecret as string,
         createdAt: Date.now(),
@@ -513,11 +520,11 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
       
       // Add segments for partial fills
       if (orderData.isPartialFillEnabled && orderData.partialFillSecrets) {
-        const segmentAmount = parseFloat(orderData.srcAmount as string) / orderData.partialFillSecrets.length
+        const segmentAmount = parseFloat(orderData.dstAmount as string) / orderData.partialFillSecrets.length
         orderProgress.segments = orderData.partialFillSecrets.map((_, index) => ({
           id: index + 1,
           amount: segmentAmount.toString(),
-          status: 'pending',
+          status: 'segment_auction_started', // Start with segment auction
           fillPercentage: 0
         }))
       }
@@ -525,6 +532,9 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
       // Add order to progress tracking
       setCurrentOrder(orderProgress)
       setShowOrderProgress(true)
+      
+      // Initialize real-time progress tracking
+      setOrderProgress(orderProgress)
       
       // Store the original OrderData for secret sharing
       setOrderDataMap(prev => {
@@ -589,7 +599,7 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
       if (currentOrder && currentOrder.orderId === orderId) {
         setCurrentOrder({
           ...currentOrder,
-          status: 'secret-shared',
+          status: 'secret_received',
           updatedAt: Date.now()
         })
       }
@@ -613,12 +623,14 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
     if (!currentOrder) return
 
     const statuses: OrderProgress['status'][] = [
-      'created',
-      'auction', 
-      'resolver-assigned',
-      'escrows-created',
-      'verified',
-      'secret-requested'
+      'auction_started',
+      'price_update', 
+      'auction_ended',
+      'resolver_declared',
+      'source_escrow_created',
+      'destination_escrow_created',
+      'escrows_verified',
+      'secret_requested'
     ]
 
     let currentIndex = statuses.indexOf(currentOrder.status)
