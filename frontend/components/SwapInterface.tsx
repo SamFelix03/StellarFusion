@@ -26,7 +26,9 @@ import Aurora from "./Aurora"
 import OrderDetails from "./OrderDetails"
 import PartialFillSettings from "./PartialFillSettings"
 import LoadingModal from "./LoadingModal"
-import { createOrder, sendOrderToRelayer, prepareBuyer, prepareStellarBuyer, OrderData } from "@/lib/order-utils"
+import { createOrder, sendOrderToRelayer, prepareBuyer, prepareStellarBuyer, shareSecretsWithRelayer, shareSegmentSecret, OrderData } from "@/lib/order-utils"
+import OrderProgressModal from "./OrderProgressModal"
+import { OrderProgress } from "./OrderProgressModal"
 import { toast } from "@/components/ui/use-toast"
 
 interface Token {
@@ -35,7 +37,7 @@ interface Token {
   icon: string
   balance: number
   usdValue: number
-  chain: "Ethereum" | "Stellar"
+  chain: "Sepolia Testnet" | "Stellar Testnet"
   address: string
   coingeckoId?: string
 }
@@ -45,8 +47,8 @@ interface SwapState {
   toToken: Token | null
   fromAmount: string
   toAmount: string
-  fromChain: "Ethereum" | "Stellar"
-  toChain: "Ethereum" | "Stellar"
+  fromChain: "Sepolia Testnet" | "Stellar Testnet"
+  toChain: "Sepolia Testnet" | "Stellar Testnet"
 }
 
 interface PriceData {
@@ -55,65 +57,54 @@ interface PriceData {
   }
 }
 
-const mockTokens: Token[] = [
-  {
-    symbol: "ETH",
-    name: "Ether",
-    icon: "🔷",
-    balance: 0,
-    usdValue: 0,
-    chain: "Ethereum",
-    address: "0x0000000000000000000000000000000000000000",
-    coingeckoId: "ethereum"
-  },
-  {
-    symbol: "Sepolia ETH",
-    name: "Sepolia Ether",
-    icon: "🔷",
-    balance: 0,
-    usdValue: 0,
-    chain: "Ethereum",
-    address: "0x0000000000000000000000000000000000000000",
-    coingeckoId: "ethereum"
-  },
-  {
-    symbol: "USDC",
-    name: "USD Coin",
-    icon: "💙",
-    balance: 0,
-    usdValue: 0,
-    chain: "Ethereum",
-    address: "0xA0b86a33E6441b8C4C8C8C8C8C8C8C8C8C8C8C8"
-  },
-  {
-    symbol: "USDT",
-    name: "Tether USD",
-    icon: "💚",
-    balance: 0,
-    usdValue: 0,
-    chain: "Ethereum",
-    address: "0xdAC17F958D2ee523a2206206994597C13D831ec7"
-  },
-  {
-    symbol: "XLM",
-    name: "Stellar Lumens",
-    icon: "⭐",
-    balance: 0,
-    usdValue: 0,
-    chain: "Stellar",
-    address: "native",
-    coingeckoId: "stellar"
-  },
-  {
-    symbol: "USDC",
-    name: "USD Coin",
-    icon: "💙",
-    balance: 0,
-    usdValue: 0,
-    chain: "Stellar",
-    address: "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34KUEKUS"
-  }
-]
+// Import chain configuration
+import { chainsConfig } from "@/constants/chains"
+
+interface TokenConfig {
+  name: string
+  symbol: string
+  address: string
+  decimals: number
+  isNative: boolean
+}
+
+const getTokensFromConfig = (): Token[] => {
+  const tokens: Token[] = []
+  
+  // Add Sepolia tokens
+  const sepoliaTokens = chainsConfig.sepolia.tokens as Record<string, TokenConfig>
+  Object.entries(sepoliaTokens).forEach(([symbol, token]) => {
+    tokens.push({
+      symbol: symbol,
+      name: token.name,
+      icon: symbol === "ETH" ? "🔷" : symbol === "WETH" ? "🔷" : symbol === "USDC" ? "💙" : "💚",
+      balance: 0,
+      usdValue: 0,
+      chain: "Sepolia Testnet",
+      address: token.address,
+      coingeckoId: symbol === "ETH" || symbol === "WETH" ? "ethereum" : undefined
+    })
+  })
+  
+  // Add Stellar tokens
+  const stellarTokens = chainsConfig["stellar-testnet"].tokens as Record<string, TokenConfig>
+  Object.entries(stellarTokens).forEach(([symbol, token]) => {
+    tokens.push({
+      symbol: symbol,
+      name: token.name,
+      icon: symbol === "XLM" ? "⭐" : symbol === "USDC" ? "💙" : "💚",
+      balance: 0,
+      usdValue: 0,
+      chain: "Stellar Testnet",
+      address: token.address,
+      coingeckoId: symbol === "XLM" ? "stellar" : undefined
+    })
+  })
+  
+  return tokens
+}
+
+const mockTokens: Token[] = getTokensFromConfig()
 
 export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => void }) {
   const { 
@@ -137,8 +128,8 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
     toToken: null,
     fromAmount: "",
     toAmount: "",
-    fromChain: "Ethereum",
-    toChain: "Stellar"
+    fromChain: "Sepolia Testnet",
+    toChain: "Stellar Testnet"
   })
   
   const [showTokenSelector, setShowTokenSelector] = useState(false)
@@ -148,30 +139,27 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
   const [currentUsdValue, setCurrentUsdValue] = useState(0)
   const [tokensWithBalances, setTokensWithBalances] = useState<Token[]>(mockTokens)
   
-  // Debug: Log current state on every render
-  console.log("🎯 SwapInterface Render Debug:")
-  console.log("   - Stellar wallet:", stellarWallet)
-  console.log("   - Stellar connected:", stellarWallet?.isConnected)
-  console.log("   - Stellar balance:", stellarWallet?.balance)
-  console.log("   - Update counter:", updateCounter)
-  console.log("   - Tokens with balances:", tokensWithBalances)
-
   // Monitor Stellar wallet changes
   useEffect(() => {
-    console.log("🔄 Stellar wallet changed:", stellarWallet)
     if (stellarWallet?.isConnected) {
-      console.log("✅ Stellar wallet is connected, balance:", stellarWallet.balance)
     }
   }, [stellarWallet])
 
   // Monitor balanceRef changes
   useEffect(() => {
-    console.log("🔄 Balance ref changed:", balanceRef.current)
     if (balanceRef.current !== '0') {
       console.log("💰 Balance ref has non-zero value:", balanceRef.current)
     }
   }, [updateCounter]) // Re-run when updateCounter changes
   
+  // Monitor Stellar wallet changes more effectively
+  useEffect(() => {
+    if (stellarWallet?.isConnected) {
+      console.log("✅ Stellar wallet is connected, balance:", stellarWallet.balance)
+      console.log("🔧 Balance ref value:", balanceRef.current)
+    }
+  }, [stellarWallet, updateCounter])
+
   // Order creation state
   const [enablePartialFills, setEnablePartialFills] = useState(false)
   const [partsCount, setPartsCount] = useState(4)
@@ -185,6 +173,11 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
     message: string
   }>({ type: null, message: '' })
 
+  // Order progress tracking - simplified for current order only
+  const [currentOrder, setCurrentOrder] = useState<OrderProgress | null>(null)
+  const [showOrderProgress, setShowOrderProgress] = useState(false)
+  const [orderDataMap, setOrderDataMap] = useState<Map<string, OrderData>>(new Map())
+
   // Fetch real ETH balance using wagmi
   const { data: ethBalance } = useBalance({
     address: address as `0x${string}` | undefined,
@@ -195,7 +188,6 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
     try {
       const response = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=ethereum,stellar&vs_currencies=usd')
       const data = await response.json()
-      console.log('Fetched price data:', data)
       setPriceData(data)
     } catch (error) {
       console.error('Failed to fetch prices:', error)
@@ -212,48 +204,66 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
 
   // Update token balances when wallet connects or ETH balance changes
   useEffect(() => {
-    console.log("🔄 Updating token balances...")
-    console.log("📊 Stellar wallet state:", stellarWallet)
-    console.log("💰 Stellar balance:", stellarWallet?.balance)
-    console.log("🔗 Stellar connected:", stellarWallet?.isConnected)
-    
     const updatedTokens = mockTokens.map(token => {
-      if (token.symbol === "ETH" || token.symbol === "Sepolia ETH") {
+      // Handle Ethereum tokens (ETH, WETH, USDC)
+      if (token.chain === "Sepolia Testnet") {
+        if (token.symbol === "ETH" || token.symbol === "WETH") {
+          return {
+            ...token,
+            balance: isConnected && ethBalance ? parseFloat(ethBalance.formatted) : 0,
+            usdValue: isConnected && ethBalance ? parseFloat(ethBalance.formatted) * (priceData.ethereum?.usd || 0) : 0
+          }
+        }
+        // For other Ethereum tokens (USDC), balance would be fetched separately
         return {
           ...token,
-          balance: isConnected && ethBalance ? parseFloat(ethBalance.formatted) : 0,
-          usdValue: isConnected && ethBalance ? parseFloat(ethBalance.formatted) * (priceData.ethereum?.usd || 0) : 0
+          balance: 0, // TODO: Fetch actual token balances
+          usdValue: 0
         }
       }
-      if (token.symbol === "XLM") {
-        const xlmBalance = stellarWallet?.isConnected ? parseFloat(stellarWallet.balance) : 0
-        const xlmUsdValue = stellarWallet?.isConnected ? parseFloat(stellarWallet.balance) * (priceData.stellar?.usd || 0) : 0
-        
-        console.log("⭐ XLM token update:")
-        console.log("   - Connected:", stellarWallet?.isConnected)
-        console.log("   - Raw balance:", stellarWallet?.balance)
-        console.log("   - Parsed balance:", xlmBalance)
-        console.log("   - USD value:", xlmUsdValue)
-        
+      
+      // Handle Stellar tokens (XLM, USDC)
+      if (token.chain === "Stellar Testnet") {
+        if (token.symbol === "XLM") {
+          // Use both stellarWallet.balance and balanceRef.current for redundancy
+          const rawBalance = stellarWallet?.balance || balanceRef.current || '0'
+          const xlmBalance = stellarWallet?.isConnected ? parseFloat(rawBalance) : 0
+          const xlmUsdValue = stellarWallet?.isConnected ? parseFloat(rawBalance) * (priceData.stellar?.usd || 0) : 0
+          
+          console.log("⭐ XLM Balance Update:")
+          console.log("   - Stellar wallet connected:", stellarWallet?.isConnected)
+          console.log("   - Raw balance from wallet:", stellarWallet?.balance)
+          console.log("   - Raw balance from ref:", balanceRef.current)
+          console.log("   - Used balance:", rawBalance)
+          console.log("   - Parsed balance:", xlmBalance)
+          console.log("   - USD value:", xlmUsdValue)
+          
+          return {
+            ...token,
+            balance: xlmBalance,
+            usdValue: xlmUsdValue
+          }
+        }
+        // For other Stellar tokens (USDC), balance would be fetched separately
         return {
           ...token,
-          balance: xlmBalance,
-          usdValue: xlmUsdValue
+          balance: 0, // TODO: Fetch actual token balances
+          usdValue: 0
         }
       }
+      
       return token
     })
     
-    console.log("📋 Updated tokens:", updatedTokens)
     setTokensWithBalances(updatedTokens)
     
     // Update swap state with first available tokens
     setSwapState(prev => ({
       ...prev,
-      fromToken: updatedTokens.find(t => t.chain === "Ethereum") || null,
-      toToken: updatedTokens.find(t => t.chain === "Stellar") || null
+      fromToken: updatedTokens.find(t => t.chain === "Sepolia Testnet") || null,
+      toToken: updatedTokens.find(t => t.chain === "Stellar Testnet") || null
     }))
-  }, [isConnected, address, ethBalance, stellarWallet, priceData])
+  }, [isConnected, address, ethBalance, stellarWallet, balanceRef.current, updateCounter, priceData])
 
   // Calculate USD value when amount or price data changes
   useEffect(() => {
@@ -284,7 +294,7 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
         ...prev,
         fromToken: token,
         fromChain: token.chain,
-        toChain: token.chain === "Ethereum" ? "Stellar" : "Ethereum",
+        toChain: token.chain === "Sepolia Testnet" ? "Stellar Testnet" : "Sepolia Testnet",
         fromAmount: token.balance.toString() // Auto-fill with balance
       }))
     } else {
@@ -320,8 +330,6 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
       
       if (fromTokenId && toTokenId && priceData[fromTokenId] && priceData[toTokenId]) {
         conversionRate = priceData[fromTokenId].usd / priceData[toTokenId].usd
-        console.log(`Conversion rate: 1 ${swapState.fromToken.symbol} = ${conversionRate} ${swapState.toToken.symbol}`)
-        console.log(`Price data: ETH=${priceData.ethereum?.usd}, XLM=${priceData.stellar?.usd}`)
       }
     }
     
@@ -356,8 +364,8 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
                   parseFloat(swapState.fromAmount) <= (swapState.fromToken?.balance || 0)
 
   // Check if required wallets are connected
-  const isEthereumRequired = swapState.fromChain === "Ethereum" || swapState.toChain === "Ethereum"
-  const isStellarRequired = swapState.fromChain === "Stellar" || swapState.toChain === "Stellar"
+  const isEthereumRequired = swapState.fromChain === "Sepolia Testnet" || swapState.toChain === "Sepolia Testnet"
+  const isStellarRequired = swapState.fromChain === "Stellar Testnet" || swapState.toChain === "Stellar Testnet"
   
   const ethereumWalletConnected = isConnected
   const stellarWalletConnected = stellarWallet?.isConnected
@@ -376,8 +384,8 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
     // Check wallet connections
     if (isEthereumRequired && !ethereumWalletConnected) {
       toast({
-        title: "Ethereum Wallet Required",
-        description: "Please connect your MetaMask wallet to create this order.",
+        title: "Sepolia Testnet Wallet Required",
+        description: "Please connect your MetaMask wallet to Sepolia testnet to create this order.",
         variant: "destructive",
       })
       return
@@ -385,22 +393,22 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
 
     if (isStellarRequired && !stellarWalletConnected) {
       toast({
-        title: "Stellar Wallet Required",
-        description: "Please connect your Freighter wallet to create this order.",
+        title: "Stellar Testnet Wallet Required",
+        description: "Please connect your Freighter wallet to Stellar testnet to create this order.",
         variant: "destructive",
       })
       return
     }
 
     try {
-      console.log('🚀 Creating order...')
       setShowLoadingModal(true)
       setLoadingStep(1) // Step 1: Order creation
       
       // Convert token symbol to the correct format for order creation
       const getTokenKey = (token: Token) => {
-        if (token.symbol === "Sepolia ETH") return "sepolia-eth"
-        if (token.symbol === "ETH") return "eth"
+        if (token.symbol === "ETH" || token.symbol === "WETH") return "eth"
+        if (token.symbol === "XLM") return "xlm"
+        if (token.symbol === "USDC") return "usdc"
         return token.symbol.toLowerCase().replace(' ', '-')
       }
       
@@ -419,9 +427,6 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
       setOrderData(orderData)
       setShowOrderDetails(true)
       setShowLoadingModal(false)
-      
-      console.log('✅ Order created successfully!')
-      console.log('Order Data:', orderData)
       
     } catch (error) {
       setShowLoadingModal(false)
@@ -442,14 +447,10 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
       setShowLoadingModal(true);
       setLoadingStep(2); // Step 2: Buyer preparation
       
-      console.log('🚀 Starting order confirmation process...');
-      
       // Step 1: Prepare buyer (APPROVAL PHASE) - IMMEDIATELY after order creation
-      console.log('\n📋 STEP 1: Buyer Preparation');
-      console.log('-----------------------------');
       
       // Handle Ethereum approvals
-      if (swapState.fromChain === "Ethereum" || swapState.toChain === "Ethereum") {
+      if (swapState.fromChain === "Sepolia Testnet" || swapState.toChain === "Sepolia Testnet") {
         if (!address) {
           throw new Error('Ethereum wallet not connected');
         }
@@ -467,13 +468,12 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
       }
       
       // Handle Stellar approvals (if needed)
-      if (swapState.fromChain === "Stellar" || swapState.toChain === "Stellar") {
+      if (swapState.fromChain === "Stellar Testnet" || swapState.toChain === "Stellar Testnet") {
         if (!stellarWallet?.isConnected) {
           throw new Error('Stellar wallet not connected');
         }
         
         // For Stellar, we might need to handle trustlines or other approvals
-        console.log('🔐 Stellar wallet connected, proceeding with order...');
         await prepareStellarBuyer(
           orderData.srcToken as string,
           orderData.srcAmount as string,
@@ -484,8 +484,6 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
       setLoadingStep(3); // Step 3: Sending to relayer
       
       // Step 2: Send order to relayer
-      console.log('\n🔄 STEP 2: Sending to Relayer');
-      console.log('------------------------------');
       
       const response = await sendOrderToRelayer(orderData, orderData.isPartialFillEnabled);
       
@@ -495,8 +493,45 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
       setShowOrderDetails(false);
       setOrderData(null);
       
-      console.log('✅ Order sent to relayer successfully!');
-      console.log('Response:', response);
+      // Create order progress entry
+      const orderProgress: OrderProgress = {
+        orderId: orderData.orderId,
+        orderType: orderData.isPartialFillEnabled ? 'partial' : 'single',
+        status: 'created',
+        totalAmount: orderData.srcAmount as string,
+        filledAmount: '0',
+        fillPercentage: 0,
+        sourceToken: orderData.srcToken as string,
+        destinationToken: orderData.dstToken as string,
+        sourceChain: orderData.srcChainId as string,
+        destinationChain: orderData.dstChainId as string,
+        buyerAddress: orderData.buyerAddress as string,
+        hashedSecret: orderData.hashedSecret as string,
+        createdAt: Date.now(),
+        updatedAt: Date.now()
+      }
+      
+      // Add segments for partial fills
+      if (orderData.isPartialFillEnabled && orderData.partialFillSecrets) {
+        const segmentAmount = parseFloat(orderData.srcAmount as string) / orderData.partialFillSecrets.length
+        orderProgress.segments = orderData.partialFillSecrets.map((_, index) => ({
+          id: index + 1,
+          amount: segmentAmount.toString(),
+          status: 'pending',
+          fillPercentage: 0
+        }))
+      }
+      
+      // Add order to progress tracking
+      setCurrentOrder(orderProgress)
+      setShowOrderProgress(true)
+      
+      // Store the original OrderData for secret sharing
+      setOrderDataMap(prev => {
+        const newMap = new Map(prev)
+        newMap.set(orderData.orderId, orderData)
+        return newMap
+      })
       
       // Show success message
       toast({
@@ -520,43 +555,83 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
     try {
       console.log("🔄 Manually refreshing XLM balance...")
       await connectStellar()
+      
+      // Force a re-render after connection
+      setTimeout(() => {
+        console.log("⏰ After refresh delay - checking balance")
+        console.log("💰 Current stellarWallet state:", stellarWallet)
+        console.log("💰 Current balanceRef:", balanceRef.current)
+      }, 500)
+      
       console.log("✅ XLM balance refreshed")
     } catch (error) {
       console.error("❌ Failed to refresh XLM balance:", error)
     }
   }
 
-  const handleTestBalance = async () => {
+  // Handle secret sharing
+  const handleShareSecret = async (orderId: string, segmentId?: number) => {
     try {
-      console.log("🧪 Testing balance fetch directly...")
-      if (!stellarWallet?.publicKey) {
-        console.log("❌ No public key available")
-        return
+      const orderData = orderDataMap.get(orderId)
+      if (!orderData) {
+        throw new Error('Order data not found')
       }
-      
-      const horizonUrl = 'https://horizon-testnet.stellar.org'
-      const response = await fetch(`${horizonUrl}/accounts/${stellarWallet.publicKey}`)
-      console.log("📊 Direct API response status:", response.status)
-      
-      if (response.ok) {
-        const accountData = await response.json()
-        console.log("📋 Direct account data:", accountData)
-        
-        const xlmBalance = accountData.balances.find((balance: any) => 
-          balance.asset_type === 'native'
-        )
-        console.log("💰 Direct XLM balance found:", xlmBalance)
-        
-        if (xlmBalance) {
-          console.log("✅ Direct balance:", xlmBalance.balance)
-          alert(`Direct balance: ${xlmBalance.balance} XLM`)
-        }
+
+      if (segmentId) {
+        // Share segment secret for partial fills
+        await shareSegmentSecret(orderId, segmentId, orderData)
       } else {
-        console.log("❌ Direct API error:", await response.text())
+        // Share main secret for single fills
+        await shareSecretsWithRelayer(orderData)
       }
+
+      // Update current order status
+      if (currentOrder && currentOrder.orderId === orderId) {
+        setCurrentOrder({
+          ...currentOrder,
+          status: 'secret-shared',
+          updatedAt: Date.now()
+        })
+      }
+      
+      toast({
+        title: "Secret Shared Successfully",
+        description: segmentId ? `Segment ${segmentId} secret shared` : "Main secret shared",
+      })
     } catch (error) {
-      console.error("❌ Direct balance test failed:", error)
+      console.error('❌ Error sharing secret:', error)
+      toast({
+        title: "Error Sharing Secret",
+        description: error instanceof Error ? error.message : "Failed to share secret",
+        variant: "destructive",
+      })
     }
+  }
+
+  // Simulate order status updates (for demo purposes)
+  const simulateOrderProgress = () => {
+    if (!currentOrder) return
+
+    const statuses: OrderProgress['status'][] = [
+      'created',
+      'auction', 
+      'resolver-assigned',
+      'escrows-created',
+      'verified',
+      'secret-requested'
+    ]
+
+    let currentIndex = statuses.indexOf(currentOrder.status)
+    if (currentIndex === -1) currentIndex = 0
+
+    const nextIndex = (currentIndex + 1) % statuses.length
+    const nextStatus = statuses[nextIndex]
+
+    setCurrentOrder({
+      ...currentOrder,
+      status: nextStatus,
+      updatedAt: Date.now()
+    })
   }
 
   return (
@@ -616,9 +691,9 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
               {/* Wallet Status Indicators */}
               <div className="flex items-center gap-2">
                 <div className={`w-2 h-2 rounded-full ${ethereumWalletConnected ? 'bg-green-400' : 'bg-red-400'}`} />
-                <span className="text-xs text-white/60">ETH</span>
+                <span className="text-xs text-white/60">Sepolia</span>
                 <div className={`w-2 h-2 rounded-full ${stellarWalletConnected ? 'bg-green-400' : 'bg-red-400'}`} />
-                <span className="text-xs text-white/60">XLM</span>
+                <span className="text-xs text-white/60">Stellar</span>
               </div>
             </div>
 
@@ -626,13 +701,13 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
             {(!ethereumWalletConnected && isEthereumRequired) || (!stellarWalletConnected && isStellarRequired) ? (
               <div className="text-center py-8">
                 <Wallet className="w-12 h-12 mx-auto mb-4 text-white/60" />
-                <h3 className="text-lg font-semibold mb-2 text-white">Wallets Required</h3>
+                <h3 className="text-lg font-semibold mb-2 text-white">Testnet Wallets Required</h3>
                 <p className="text-white/60 mb-6">
                   {!ethereumWalletConnected && isEthereumRequired && !stellarWalletConnected && isStellarRequired
-                    ? "Please connect both MetaMask and Freighter wallets"
+                    ? "Please connect both MetaMask (Sepolia) and Freighter (Stellar Testnet) wallets"
                     : !ethereumWalletConnected && isEthereumRequired
-                    ? "Please connect your MetaMask wallet"
-                    : "Please connect your Freighter wallet"
+                    ? "Please connect your MetaMask wallet to Sepolia testnet"
+                    : "Please connect your Freighter wallet to Stellar testnet"
                   }
                 </p>
                 
@@ -644,7 +719,7 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
                       className="bg-blue-600 hover:bg-blue-700 text-white"
                     >
                       <Wallet className="w-4 h-4 mr-2" />
-                      {isLoading ? "Connecting..." : "Connect MetaMask"}
+                      {isLoading ? "Connecting..." : "Connect MetaMask (Sepolia)"}
                     </Button>
                   )}
                   
@@ -655,7 +730,7 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
                       className="bg-purple-600 hover:bg-purple-700 text-white"
                     >
                       <Star className="w-4 h-4 mr-2" />
-                      {isStellarLoading ? "Connecting..." : "Connect Freighter"}
+                      {isStellarLoading ? "Connecting..." : "Connect Freighter (Testnet)"}
                     </Button>
                   )}
                 </div>
@@ -704,12 +779,21 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
                     </div>
                     
                     <div className="text-right min-w-0 flex-1 ml-4">
-                      <Input
-                        type="number"
+                      <input
+                        type="text"
                         value={swapState.fromAmount}
-                        onChange={(e) => handleFromAmountChange(e.target.value)}
+                        onChange={(e) => {
+                          const value = e.target.value
+                          // Only allow numbers and decimal point
+                          const sanitizedValue = value.replace(/[^0-9.]/g, '')
+                          handleFromAmountChange(sanitizedValue)
+                        }}
                         placeholder="0.0"
-                        className="text-right text-2xl font-bold bg-transparent border-none text-white placeholder-white/40 focus:ring-0 w-full"
+                        className="text-right text-2xl font-bold bg-transparent border-none text-white placeholder-white/40 focus:outline-none focus:ring-0 w-full [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                        style={{
+                          WebkitAppearance: 'none',
+                          MozAppearance: 'textfield'
+                        }}
                       />
                       <div className="text-sm text-white/60 truncate">
                         ~${currentUsdValue.toFixed(2)}
@@ -860,10 +944,6 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
                         <div>XLM: {stellarWallet.publicKey.slice(0, 6)}...{stellarWallet.publicKey.slice(-4)}</div>
                         <div className="text-xs text-white/40 mt-1">
                           Balance: {parseFloat(stellarWallet.balance || balanceRef.current).toFixed(4)} XLM
-                          {/* Debug info */}
-                          <div className="text-xs text-red-400 mt-1">
-                            Debug: Raw={stellarWallet.balance || balanceRef.current}, Parsed={parseFloat(stellarWallet.balance || balanceRef.current)}
-                          </div>
                         </div>
                       </div>
                     )}
@@ -877,6 +957,16 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
                     >
                       Manage Wallets
                     </Button>
+                    {currentOrder && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={simulateOrderProgress}
+                        className="text-xs text-white/40 hover:text-white hover:bg-white/10"
+                      >
+                        Simulate Progress
+                      </Button>
+                    )}
                     {isMounted && stellarWalletConnected && (
                       <Button
                         variant="ghost"
@@ -886,16 +976,6 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
                         className="text-xs text-white/40 hover:text-white hover:bg-white/10"
                       >
                         {isStellarLoading ? "Refreshing..." : "Refresh XLM"}
-                      </Button>
-                    )}
-                    {isMounted && stellarWalletConnected && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={handleTestBalance}
-                        className="text-xs text-red-400 hover:text-red-300 hover:bg-red-500/10"
-                      >
-                        Test Balance
                       </Button>
                     )}
                   </div>
@@ -914,7 +994,7 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
               <DialogHeader>
                 <DialogTitle className="flex items-center space-x-2 text-white">
                   <span>🌐</span>
-                  <span>All networks</span>
+                  <span>Testnet Networks</span>
                   <ChevronDown className="w-4 h-4" />
                 </DialogTitle>
               </DialogHeader>
@@ -922,17 +1002,18 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
               {/* Search */}
               <div className="relative mb-4">
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-white/40" />
-                <Input
+                <input
+                  type="text"
                   placeholder="Search by name or paste address"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="pl-10 bg-black/30 border-white/10 text-white placeholder-white/40"
+                  className="pl-10 bg-black/30 border border-white/10 rounded-lg text-white placeholder-white/40 min-h-[2.5rem] w-full focus:outline-none focus:border-white/20"
                 />
               </div>
 
               {/* Popular Tokens */}
               <div className="flex space-x-2 mb-4 overflow-x-auto pb-2">
-                {["ETH", "Sepolia ETH", "XLM", "USDC", "USDT"].map((symbol) => (
+                {["ETH", "WETH", "XLM", "USDC"].map((symbol) => (
                   <Button
                     key={symbol}
                     variant="ghost"
@@ -957,14 +1038,11 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
                       <span className="text-xl">{token.icon}</span>
                       <div className="text-left">
                         <div className="font-semibold">{token.name}</div>
-                        <div className="text-sm text-white/60">
-                          {token.balance.toFixed(4)} {token.symbol} · {token.chain}
-                        </div>
+                        <div className="text-sm text-white/60">{token.symbol}</div>
                       </div>
                     </div>
                     <div className="text-right">
                       <div className="text-sm">${token.usdValue.toFixed(2)}</div>
-                      <Star className="w-4 h-4 text-white/40" />
                     </div>
                   </Button>
                 ))}
@@ -995,6 +1073,14 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
                 loadingStep === 2 ? "Preparing buyer approval..." : 
                 loadingStep === 3 ? "Sending to relayer..." : 
                 "Processing response..."}
+      />
+
+      {/* Order Progress Modal */}
+      <OrderProgressModal
+        isOpen={showOrderProgress}
+        onClose={() => setShowOrderProgress(false)}
+        orderData={currentOrder}
+        onShareSecret={handleShareSecret}
       />
     </div>
   )

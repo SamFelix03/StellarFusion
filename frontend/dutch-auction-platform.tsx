@@ -28,21 +28,26 @@ import Dither from "./components/Dither"
 import { createAuctionClient, Auction, SingleAuction, SegmentedAuction, AuctionSegment } from "@/lib/auction-client"
 import { useWallet } from "./components/WalletProvider"
 import ResolverExecutionModal from "./components/ResolverExecutionModal"
-import SourceEscrowModal from "./components/SourceEscrowModal"
 import { toast } from "@/hooks/use-toast"
 
 interface AuctionDetails {
+  // Core auction identification
   orderId: string
   orderType: 'normal' | 'partialfill'
   auctionType: 'single' | 'segmented'
-  gasEstimate: number
-  contractAddress: string
-  description: string
-  swapFee: number
-  tokenName: string
-  tokenSymbol: string
-  fromChain: string
-  toChain: string
+  hashedSecret: string
+  buyerAddress: string // Now provided by relayer from the start
+  
+  // Auction participants
+  winner?: string | null
+  status?: 'active' | 'completed' | 'expired'
+  
+  // Chain and token info (derived from orderId patterns)
+  fromChain?: string
+  toChain?: string
+  tokenName?: string
+  tokenSymbol?: string
+  
   // Single auction properties
   currentPrice?: number
   startPrice?: number
@@ -51,13 +56,9 @@ interface AuctionDetails {
   sourceAmount?: number
   marketPrice?: number
   slippage?: number
-  winner?: string | null
-  status?: 'active' | 'completed' | 'expired'
-  endTime?: number | null
+  
   // Segmented auction properties
   segments?: AuctionSegment[]
-  totalWinners?: any[]
-  intervals?: any[]
 }
 
 export default function Component({ onBackToHome }: { onBackToHome?: () => void }) {
@@ -73,8 +74,6 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
   const [connectionStatus, setConnectionStatus] = useState('disconnected')
   const [isExecutionModalOpen, setIsExecutionModalOpen] = useState(false)
   const [executingAuction, setExecutingAuction] = useState<AuctionDetails | null>(null)
-  const [isSourceEscrowModalOpen, setIsSourceEscrowModalOpen] = useState(false)
-  const [sourceEscrowAuction, setSourceEscrowAuction] = useState<AuctionDetails | null>(null)
   const auctionClientRef = useRef<ReturnType<typeof createAuctionClient> | null>(null)
 
   // Get the current user's address for winner identification
@@ -83,6 +82,7 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
     if (stellarWallet?.publicKey) return stellarWallet.publicKey
     return null
   }
+
 
   // Initialize auction client only when component mounts
   useEffect(() => {
@@ -166,6 +166,8 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
               orderId: serverAuction.orderId,
               orderType: 'partialfill',
               auctionType: 'segmented',
+              hashedSecret: serverAuction.hashedSecret,
+              buyerAddress: serverAuction.buyerAddress,
               segments: serverAuction.segments || [],
               totalWinners: serverAuction.totalWinners || [],
               marketPrice: serverAuction.marketPrice,
@@ -181,6 +183,8 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
               orderId: serverAuction.orderId,
               orderType: 'normal',
               auctionType: 'single',
+              hashedSecret: serverAuction.hashedSecret,
+              buyerAddress: serverAuction.buyerAddress,
               currentPrice: serverAuction.currentPrice,
               startPrice: serverAuction.startPrice,
               endPrice: serverAuction.endPrice,
@@ -270,14 +274,11 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
     
     const details: AuctionDetails = {
       ...auction,
-      gasEstimate: Math.floor(Math.random() * 50000) + 21000,
-      contractAddress: `0x${Math.random().toString(16).substr(2, 40)}`,
-      description: `Cross-chain swap from ${tokenInfo.fromChain} to ${tokenInfo.toChain} for ${tokenInfo.tokenName}. Participate as a resolver to facilitate this fusion swap.`,
-      swapFee: Math.random() * 0.5 + 0.1,
       tokenName: tokenInfo.tokenName,
       tokenSymbol: tokenInfo.tokenSymbol,
       fromChain: tokenInfo.fromChain,
-      toChain: tokenInfo.toChain,
+      toChain: tokenInfo.toChain
+      // buyerAddress comes from the relayer auction data
     }
     
     console.log('📊 Auction details:', details)
@@ -398,9 +399,9 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
         auctionClientRef.current.confirmAuction(pendingConfirmation.orderId, undefined, userAddress)
         console.log(`🏆 Confirming auction ${pendingConfirmation.orderId} as winner: ${userAddress}`)
         
-        // Open source escrow modal for normal orders
-        setSourceEscrowAuction(pendingConfirmation as AuctionDetails)
-        setIsSourceEscrowModalOpen(true)
+        // Open resolver execution modal for normal orders
+        setExecutingAuction(pendingConfirmation as AuctionDetails)
+        setIsExecutionModalOpen(true)
       } else if (pendingConfirmation.auctionType === 'segmented') {
         if (!selectedSegmentId) {
           alert('Please select a segment first')
@@ -409,9 +410,9 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
         auctionClientRef.current.confirmAuction(pendingConfirmation.orderId, selectedSegmentId, userAddress)
         console.log(`🏆 Confirming segment ${selectedSegmentId} of auction ${pendingConfirmation.orderId} as winner: ${userAddress}`)
         
-        // Open source escrow modal for partial fill orders
-        setSourceEscrowAuction(pendingConfirmation as AuctionDetails)
-        setIsSourceEscrowModalOpen(true)
+        // Open resolver execution modal for partial fill orders
+        setExecutingAuction(pendingConfirmation as AuctionDetails)
+        setIsExecutionModalOpen(true)
       }
 
       // Close confirmation modal
@@ -436,23 +437,6 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
     })
   }
 
-  const handleSourceEscrowCreated = (result: any) => {
-    setIsSourceEscrowModalOpen(false)
-    setSourceEscrowAuction(null)
-    
-    if (result.success) {
-      toast({
-        title: "Source Escrow Created!",
-        description: `Source escrow created successfully. Transaction: ${result.transactionHash?.slice(0, 10)}...`,
-      })
-    } else {
-      toast({
-        title: "Source Escrow Creation Failed",
-        description: result.error || "Unknown error occurred",
-        variant: "destructive"
-      })
-    }
-  }
 
   const handleRefreshConnection = () => {
     if (auctionClientRef.current) {
@@ -821,7 +805,7 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
               <div className="p-4 border-b border-white/30">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 bg-black/5 backdrop-blur-sm rounded-xl flex items-center justify-center text-black font-bold border border-black/10">
-                    {selectedAuction.tokenSymbol.charAt(0)}
+                    {selectedAuction.tokenSymbol?.charAt(0) || '?'}
                   </div>
                   <div>
                     <div className="flex items-center gap-2">
@@ -889,8 +873,8 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
                          <span className="text-gray-600">Source Amount:</span>
                          <span className="font-semibold text-black">
                            {selectedAuction.auctionType === 'single'
-                             ? `${(selectedAuction as SingleAuction).sourceAmount || 0} ${selectedAuction.tokenSymbol}`
-                             : `${(selectedAuction as SegmentedAuction).sourceAmount || 0} ${selectedAuction.tokenSymbol}`
+                             ? `${(selectedAuction as SingleAuction).sourceAmount || 0} ${selectedAuction.tokenSymbol || ''}`
+                             : `${(selectedAuction as SegmentedAuction).sourceAmount || 0} ${selectedAuction.tokenSymbol || ''}`
                            }
                          </span>
                        </div>
@@ -1072,13 +1056,6 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
          onExecutionComplete={handleExecutionComplete}
        />
 
-       {/* Source Escrow Modal */}
-       <SourceEscrowModal
-         isOpen={isSourceEscrowModalOpen}
-         onClose={() => setIsSourceEscrowModalOpen(false)}
-         auction={sourceEscrowAuction}
-         onEscrowCreated={handleSourceEscrowCreated}
-       />
      </div>
    )
  }
