@@ -11,8 +11,8 @@
 3. [Dutch Auction](#dutch-auction)
 
 4. [Escrow Creations](#escrow-creations)
-   - [Fusion+ Swaps](#fusion-swaps)
-   - [Partial Fills](#partial-fills)
+   - [Fusion+ Swaps](#fusion-swaps-escrow)
+   - [Partial Fills](#partial-fills-escrow)
 
 5. [Validation and Checking](#validation-and-checking)
 
@@ -61,226 +61,6 @@ The order creation process begins in the frontend interface
 1. **Token Selection**: Users select source and destination tokens from supported chains
 2. **Amount Input**: Users specify the amount to swap with real-time price calculations
 3. **Order Creation**: The `handleCreateOrder()` function initiates the order creation process
-
-#### Smart Contract Integration
-
-##### Ethereum Side (EscrowFactory.sol)
-
-The Ethereum smart contract handles order creation through the `createSrcEscrow()` function:
-
-```solidity
-// From EscrowFactory.sol lines 103-170
-function createSrcEscrow(
-    bytes32 hashedSecret,
-    address recipient,
-    address buyer,
-    uint256 tokenAmount,
-    uint256 withdrawalStart,
-    uint256 publicWithdrawalStart,
-    uint256 cancellationStart,
-    uint256 publicCancellationStart,
-    uint256 partIndex,      // 0 for complete fill
-    uint16 totalParts       // 1 for complete fill
-) external payable nonReentrant {
-    require(msg.value == DEPOSIT_AMOUNT, "Incorrect ETH deposit");
-    require(tokenAmount > 0, "Token amount must be > 0");
-    require(recipient != address(0), "Invalid recipient");
-    require(buyer != address(0), "Invalid buyer");
-    
-    // Validate time window progression
-    require(
-        publicWithdrawalStart > withdrawalStart &&
-        cancellationStart > publicWithdrawalStart &&
-        publicCancellationStart > cancellationStart,
-        "Invalid time windows"
-    );
-
-    // Create SourceEscrow contract
-    SourceEscrow escrow = new SourceEscrow{value: msg.value}(
-        buyer,  // Creator
-        recipient,
-        hashedSecret,
-        WETH,
-        tokenAmount,
-        withdrawalStart,
-        publicWithdrawalStart,
-        cancellationStart,
-        publicCancellationStart,
-        partIndex,
-        totalParts
-    );
-
-    address escrowAddress = address(escrow);
-    userEscrows[buyer].push(escrowAddress);
-    isEscrowContract[escrowAddress] = true;
-
-    // Transfer tokens from buyer to escrow
-    IERC20(WETH).transferFrom(buyer, escrowAddress, tokenAmount);
-
-    emit SrcEscrowCreated(
-        buyer,
-        recipient,
-        escrowAddress,
-        hashedSecret,
-        tokenAmount,
-        withdrawalStart,
-        publicWithdrawalStart,
-        cancellationStart,
-        publicCancellationStart
-    );
-}
-```
-
-The `createDstEscrow()` function creates destination escrows:
-
-```solidity
-// From EscrowFactory.sol lines 175-220
-function createDstEscrow(
-    bytes32 hashedSecret,
-    address recipient,
-    uint256 tokenAmount,
-    uint256 withdrawalStart,
-    uint256 publicWithdrawalStart,
-    uint256 cancellationStart,
-    uint256 partIndex,
-    uint16 totalParts
-) external payable nonReentrant {
-    require(msg.value == DEPOSIT_AMOUNT, "Incorrect ETH deposit");
-    require(tokenAmount > 0, "Token amount must be > 0");
-    require(recipient != address(0), "Invalid recipient");
-    
-    // Validate time windows
-    require(
-        publicWithdrawalStart > withdrawalStart &&
-        cancellationStart > publicWithdrawalStart,
-        "Invalid time windows"
-    );
-
-    // Create DestinationEscrow contract
-    DestinationEscrow escrow = new DestinationEscrow{value: msg.value}(
-        msg.sender,
-        recipient,
-        hashedSecret,
-        WETH,
-        tokenAmount,
-        withdrawalStart,
-        publicWithdrawalStart,
-        cancellationStart,
-        partIndex,
-        totalParts
-    );
-
-    address escrowAddress = address(escrow);
-    userEscrows[msg.sender].push(escrowAddress);
-    isEscrowContract[escrowAddress] = true;
-
-    emit DstEscrowCreated(
-        msg.sender,
-        recipient,
-        escrowAddress,
-        hashedSecret,
-        tokenAmount,
-        withdrawalStart,
-        publicWithdrawalStart,
-        cancellationStart
-    );
-}
-```
-
-##### Stellar Side (LimitOrderProtocol.sol)
-
-The Stellar smart contract handles order creation through the `fill_order()` function:
-
-```rust
-// From limit-order-protocol/src/lib.rs lines 100-180
-pub fn fill_order(
-    env: Env,
-    order_hash: BytesN<32>,
-    maker: Address,
-    recipient: Address,
-    token_amount: i128,
-    hashed_secret: BytesN<32>,
-    withdrawal_start: u64,
-    public_withdrawal_start: u64,
-    part_index: u64,
-    total_parts: u32,
-) -> Address {
-    // Validate inputs
-    if total_parts == 0 {
-        panic!("Total parts must be > 0");
-    }
-    if part_index >= total_parts as u64 {
-        panic!("Invalid part index");
-    }
-    if token_amount <= 0 {
-        panic!("Token amount must be > 0");
-    }
-
-    // Check if this part is already filled
-    let part_filled: bool = env.storage()
-        .persistent()
-        .get(&DataKey::PartsFilled(order_hash.clone(), part_index))
-        .unwrap_or(false);
-    if part_filled {
-        panic!("Part already filled");
-    }
-
-    // Check allowance - LOP must be approved to spend maker's tokens
-    let current_allowance = Self::allowance(env.clone(), maker.clone(), env.current_contract_address());
-    if current_allowance < token_amount {
-        panic!("Insufficient allowance");
-    }
-    
-    // Reduce allowance
-    let new_allowance = current_allowance - token_amount;
-    env.storage().persistent().set(
-        &DataKey::TokenAllowance(maker.clone(), env.current_contract_address()),
-        &new_allowance
-    );
-
-    // Get factory address and create escrow
-    let factory_address: Address = env.storage().instance().get(&DataKey::EscrowFactory).unwrap();
-    let factory_client = EscrowFactoryTraitClient::new(&env, &factory_address);
-    
-    // Create escrow using factory client
-    let escrow_address = factory_client.create_src_escrow_partial(
-        &env.current_contract_address(), // creator (LOP)
-        &hashed_secret,
-        &recipient,
-        &maker,        // buyer
-        &token_amount,
-        &withdrawal_start,
-        &public_withdrawal_start,
-        &(withdrawal_start + 86400), // cancellation_start (24 hours after withdrawal)
-        &part_index,
-        &total_parts,
-    );
-
-    // Track the filled order
-    let filled_order = FilledOrder {
-        order_hash: order_hash.clone(),
-        maker: maker.clone(),
-        recipient: recipient.clone(),
-        escrow_address: escrow_address.clone(),
-        part_index,
-        total_parts,
-        is_active: true,
-    };
-
-    // Store order data
-    let mut filled_orders: Vec<FilledOrder> = env.storage()
-        .persistent()
-        .get(&DataKey::FilledOrders(order_hash.clone()))
-        .unwrap_or(Vec::new(&env));
-    filled_orders.push_back(filled_order);
-    env.storage().persistent().set(&DataKey::FilledOrders(order_hash.clone()), &filled_orders);
-
-    // Mark part as filled
-    env.storage().persistent().set(&DataKey::PartsFilled(order_hash.clone(), part_index), &true);
-
-    escrow_address
-}
-```
 
 #### Hash Lock Implementation
 
@@ -431,181 +211,6 @@ export function createOrder(params: OrderCreationParams): OrderData {
     partialFillSecrets,
     partialFillSecretHashes
   };
-}
-```
-
-#### Smart Contract Integration
-
-##### Ethereum Side (EscrowFactory.sol)
-
-The Ethereum smart contract handles partial fill order creation through the `createSrcEscrow()` function:
-
-```solidity
-// From EscrowFactory.sol lines 103-170
-function createSrcEscrow(
-    bytes32 hashedSecret,
-    address recipient,
-    address buyer,
-    uint256 tokenAmount,
-    uint256 withdrawalStart,
-    uint256 publicWithdrawalStart,
-    uint256 cancellationStart,
-    uint256 publicCancellationStart,
-    uint256 partIndex,      // >0 for partial fill
-    uint16 totalParts       // >1 for partial fill
-) external payable nonReentrant {
-    require(msg.value == DEPOSIT_AMOUNT, "Incorrect ETH deposit");
-    require(tokenAmount > 0, "Token amount must be > 0");
-    require(recipient != address(0), "Invalid recipient");
-    require(buyer != address(0), "Invalid buyer");
-    
-    // Validate time window progression
-    require(
-        publicWithdrawalStart > withdrawalStart &&
-        cancellationStart > publicWithdrawalStart &&
-        publicCancellationStart > cancellationStart,
-        "Invalid time windows"
-    );
-
-    // Check if this is a partial fill or complete fill
-    bool isPartialFill = totalParts > 1;
-    if (isPartialFill) {
-        require(partIndex < totalParts, "Invalid part index");
-        require(!partialFillsUsed[hashedSecret][partIndex], "Part already used");
-        
-        // Mark this part as used and update tracking
-        partialFillsUsed[hashedSecret][partIndex] = true;
-        partialFillsCount[hashedSecret]++;
-    }
-
-    // Create SourceEscrow contract with partial fill support
-    SourceEscrow escrow = new SourceEscrow{value: msg.value}(
-        buyer,  // Creator
-        recipient,
-        hashedSecret,
-        WETH,
-        tokenAmount,
-        withdrawalStart,
-        publicWithdrawalStart,
-        cancellationStart,
-        publicCancellationStart,
-        partIndex,
-        totalParts
-    );
-
-    address escrowAddress = address(escrow);
-    userEscrows[buyer].push(escrowAddress);
-    isEscrowContract[escrowAddress] = true;
-
-    // Transfer tokens from buyer to escrow
-    IERC20(WETH).transferFrom(buyer, escrowAddress, tokenAmount);
-
-    emit SrcEscrowCreated(
-        buyer,
-        recipient,
-        escrowAddress,
-        hashedSecret,
-        tokenAmount,
-        withdrawalStart,
-        publicWithdrawalStart,
-        cancellationStart,
-        publicCancellationStart
-    );
-}
-```
-
-##### Stellar Side (LimitOrderProtocol.sol)
-
-The Stellar smart contract handles partial fill order creation through the `fill_order()` function:
-
-```rust
-// From limit-order-protocol/src/lib.rs lines 100-180
-pub fn fill_order(
-    env: Env,
-    order_hash: BytesN<32>,
-    maker: Address,
-    recipient: Address,
-    token_amount: i128,
-    hashed_secret: BytesN<32>,
-    withdrawal_start: u64,
-    public_withdrawal_start: u64,
-    part_index: u64,
-    total_parts: u32,
-) -> Address {
-    // Validate inputs
-    if total_parts == 0 {
-        panic!("Total parts must be > 0");
-    }
-    if part_index >= total_parts as u64 {
-        panic!("Invalid part index");
-    }
-    if token_amount <= 0 {
-        panic!("Token amount must be > 0");
-    }
-
-    // Check if this part is already filled
-    let part_filled: bool = env.storage()
-        .persistent()
-        .get(&DataKey::PartsFilled(order_hash.clone(), part_index))
-        .unwrap_or(false);
-    if part_filled {
-        panic!("Part already filled");
-    }
-
-    // Check allowance - LOP must be approved to spend maker's tokens
-    let current_allowance = Self::allowance(env.clone(), maker.clone(), env.current_contract_address());
-    if current_allowance < token_amount {
-        panic!("Insufficient allowance");
-    }
-    
-    // Reduce allowance
-    let new_allowance = current_allowance - token_amount;
-    env.storage().persistent().set(
-        &DataKey::TokenAllowance(maker.clone(), env.current_contract_address()),
-        &new_allowance
-    );
-
-    // Get factory address and create escrow
-    let factory_address: Address = env.storage().instance().get(&DataKey::EscrowFactory).unwrap();
-    let factory_client = EscrowFactoryTraitClient::new(&env, &factory_address);
-    
-    // Create escrow using factory client with partial fill support
-    let escrow_address = factory_client.create_src_escrow_partial(
-        &env.current_contract_address(), // creator (LOP)
-        &hashed_secret,
-        &recipient,
-        &maker,        // buyer
-        &token_amount,
-        &withdrawal_start,
-        &public_withdrawal_start,
-        &(withdrawal_start + 86400), // cancellation_start (24 hours after withdrawal)
-        &part_index,
-        &total_parts,
-    );
-
-    // Track the filled order part
-    let filled_order = FilledOrder {
-        order_hash: order_hash.clone(),
-        maker: maker.clone(),
-        recipient: recipient.clone(),
-        escrow_address: escrow_address.clone(),
-        part_index,
-        total_parts,
-        is_active: true,
-    };
-
-    // Store order data
-    let mut filled_orders: Vec<FilledOrder> = env.storage()
-        .persistent()
-        .get(&DataKey::FilledOrders(order_hash.clone()))
-        .unwrap_or(Vec::new(&env));
-    filled_orders.push_back(filled_order);
-    env.storage().persistent().set(&DataKey::FilledOrders(order_hash.clone()), &filled_orders);
-
-    // Mark part as filled
-    env.storage().persistent().set(&DataKey::PartsFilled(order_hash.clone(), part_index), &true);
-
-    escrow_address
 }
 ```
 #### Relayer Integration
@@ -800,7 +405,7 @@ console.log(`📈 Effective rate: ${effectiveRate.toFixed(2)}`);
 
 ## Escrow Creations
 
-### Fusion+ Swaps
+### Fusion+ Swaps {#fusion-swaps-escrow}
 
 Fusion+ Swaps escrow creation represents the critical phase where atomic swap execution is initiated through escrow contracts. This section details the comprehensive flow from auction winner selection to smart contract deployment and security deposit management.
 
@@ -1267,5 +872,299 @@ The escrow creation process ensures perfect coordination between chains:
 - **Insufficient Deposits**: Rejected if security deposit is incorrect
 - **Token Approval**: Rejected if WETH approval is insufficient
 - **Address Validation**: Rejected if addresses are invalid or zero
+
+---
+
+### Partial Fills {#partial-fills-escrow}
+
+Partial Fills escrow creation represents an advanced cross-chain atomic swap mechanism that enables large orders to be executed through multiple smaller segments, each with independent cryptographic verification. This section details the comprehensive flow from segmented auction completion to Merkle tree-based escrow creation and multi-chain coordination.
+
+#### Segmented Winner Selection and Data Transmission
+
+When multiple resolvers win different segments of a partial fill auction, the relayer transmits segment-specific information to each winner:
+
+**Data Transmitted to Segment Winners:**
+```json
+{
+  "orderId": "0x...",
+  "segmentId": 1,                    // Segment identifier (1-4)
+  "hashedSecret": "0x...",           // Merkle root for all segments
+  "segmentHashedSecret": "0x...",    // Individual segment hash
+  "buyerAddress": "0x...",           // Buyer's wallet address
+  "srcChainId": 11155111,            // Source chain ID
+  "dstChainId": "stellar-testnet",   // Destination chain ID
+  "srcToken": "ETH",                 // Source token symbol
+  "dstToken": "XLM",                 // Destination token symbol
+  "srcAmount": "0.025",              // Segment amount (total/4)
+  "dstAmount": "25",                 // Segment destination amount
+  "finalPrice": "3950",              // Final auction price for this segment
+  "marketPrice": "3900",             // Market price at auction start
+  "slippage": "0.02",                // Slippage tolerance
+  "auctionType": "segmented",        // Auction type
+  "winner": "resolver_address",      // Winner's address
+  "totalSegments": 4,                // Total number of segments
+  "partIndex": 0,                    // Part index (0-based)
+  "totalParts": 4,                   // Total parts
+  "escrowCreationDeadline": "..."    // Time limit for escrow creation
+}
+```
+
+#### Merkle Tree Implementation for Partial Fills
+
+StellarFusion implements a sophisticated Merkle tree system that enables cryptographic verification of individual segments while maintaining atomic execution:
+
+**Merkle Tree Structure:**
+```solidity
+// From EscrowFactory.sol lines 30-40
+library PartialFillHelper {
+    function generateLeaf(uint256 index, bytes32 secretHash) internal pure returns (bytes32) {
+        // Pack index (8 bytes) + secret hash (32 bytes) and hash with SHA256
+        bytes memory packed = abi.encodePacked(uint64(index), secretHash);
+        return sha256(packed);
+    }
+}
+```
+
+**Merkle Tree Generation Process:**
+1. **Individual Secrets**: Each segment has its own cryptographically secure 32-byte secret
+2. **Leaf Generation**: Each secret is hashed with its index to create a unique leaf
+3. **Tree Construction**: All leaves are combined to form a Merkle tree
+4. **Root Calculation**: The Merkle root serves as the main hashedSecret for all segments
+
+#### Cross-Chain Partial Fill Escrow Creation
+
+Each segment winner creates escrows on both source and destination chains with segment-specific parameters:
+
+**Ethereum Partial Fill Source Escrow Creation:**
+```solidity
+// From EscrowFactory.sol lines 103-170
+function createSrcEscrow(
+    bytes32 hashedSecret,            // Merkle root for all segments
+    address recipient,
+    address buyer,
+    uint256 tokenAmount,             // Segment amount
+    uint256 withdrawalStart,
+    uint256 publicWithdrawalStart,
+    uint256 cancellationStart,
+    uint256 publicCancellationStart,
+    uint256 partIndex,               // Segment index (0-3)
+    uint16 totalParts                // Total segments (4)
+) external payable nonReentrant {
+    require(msg.value == DEPOSIT_AMOUNT, "Incorrect ETH deposit");
+    require(tokenAmount > 0, "Token amount must be > 0");
+    require(recipient != address(0), "Invalid recipient");
+    require(buyer != address(0), "Invalid buyer");
+    
+    // Validate time window progression
+    require(
+        publicWithdrawalStart > withdrawalStart &&
+        cancellationStart > publicWithdrawalStart &&
+        publicCancellationStart > cancellationStart,
+        "Invalid time windows"
+    );
+
+    // Check if this is a partial fill
+    bool isPartialFill = totalParts > 1;
+    if (isPartialFill) {
+        require(partIndex < totalParts, "Invalid part index");
+        require(!partialFillsUsed[hashedSecret][partIndex], "Part already used");
+        
+        // Mark this part as used and update tracking
+        partialFillsUsed[hashedSecret][partIndex] = true;
+        partialFillsCount[hashedSecret]++;
+    }
+
+    // Create SourceEscrow contract with partial fill support
+    SourceEscrow escrow = new SourceEscrow{value: msg.value}(
+        buyer,  // Creator
+        recipient,
+        hashedSecret,                // Merkle root
+        WETH,
+        tokenAmount,                 // Segment amount
+        withdrawalStart,
+        publicWithdrawalStart,
+        cancellationStart,
+        publicCancellationStart,
+        partIndex,                   // Segment index
+        totalParts                   // Total segments
+    );
+
+    address escrowAddress = address(escrow);
+    userEscrows[buyer].push(escrowAddress);
+    isEscrowContract[escrowAddress] = true;
+
+    // Transfer segment tokens from buyer to escrow
+    IERC20(WETH).transferFrom(buyer, escrowAddress, tokenAmount);
+
+    emit SrcEscrowCreated(
+        buyer,
+        recipient,
+        escrowAddress,
+        hashedSecret,
+        tokenAmount,
+        withdrawalStart,
+        publicWithdrawalStart,
+        cancellationStart,
+        publicCancellationStart
+    );
+}
+```
+
+**Stellar Partial Fill Source Escrow Creation:**
+```rust
+// From limit-order-protocol/src/lib.rs lines 100-180
+pub fn fill_order(
+    env: Env,
+    order_hash: BytesN<32>,
+    maker: Address,
+    recipient: Address,
+    token_amount: i128,              // Segment amount
+    hashed_secret: BytesN<32>,       // Merkle root
+    withdrawal_start: u64,
+    public_withdrawal_start: u64,
+    part_index: u64,                 // Segment index
+    total_parts: u32,                // Total segments
+) -> Address {
+    // Validate inputs
+    if total_parts == 0 {
+        panic!("Total parts must be > 0");
+    }
+    if part_index >= total_parts as u64 {
+        panic!("Invalid part index");
+    }
+    if token_amount <= 0 {
+        panic!("Token amount must be > 0");
+    }
+
+    // Check if this part is already filled
+    let part_filled: bool = env.storage()
+        .persistent()
+        .get(&DataKey::PartsFilled(order_hash.clone(), part_index))
+        .unwrap_or(false);
+    if part_filled {
+        panic!("Part already filled");
+    }
+
+    // Check allowance - LOP must be approved to spend maker's tokens
+    let current_allowance = Self::allowance(env.clone(), maker.clone(), env.current_contract_address());
+    if current_allowance < token_amount {
+        panic!("Insufficient allowance");
+    }
+    
+    // Reduce allowance
+    let new_allowance = current_allowance - token_amount;
+    env.storage().persistent().set(
+        &DataKey::TokenAllowance(maker.clone(), env.current_contract_address()),
+        &new_allowance
+    );
+
+    // Get factory address and create escrow
+    let factory_address: Address = env.storage().instance().get(&DataKey::EscrowFactory).unwrap();
+    let factory_client = EscrowFactoryTraitClient::new(&env, &factory_address);
+    
+    // Create escrow using factory client with partial fill support
+    let escrow_address = factory_client.create_src_escrow_partial(
+        &env.current_contract_address(), // creator (LOP)
+        &hashed_secret,                  // Merkle root
+        &recipient,
+        &maker,                          // buyer
+        &token_amount,                   // Segment amount
+        &withdrawal_start,
+        &public_withdrawal_start,
+        &(withdrawal_start + 86400),     // cancellation_start
+        &part_index,                     // Segment index
+        &total_parts,                    // Total segments
+    );
+
+    // Track the filled order part
+    let filled_order = FilledOrder {
+        order_hash: order_hash.clone(),
+        maker: maker.clone(),
+        recipient: recipient.clone(),
+        escrow_address: escrow_address.clone(),
+        part_index,
+        total_parts,
+        is_active: true,
+    };
+
+    // Store order data
+    let mut filled_orders: Vec<FilledOrder> = env.storage()
+        .persistent()
+        .get(&DataKey::FilledOrders(order_hash.clone()))
+        .unwrap_or(Vec::new(&env));
+    filled_orders.push_back(filled_order);
+    env.storage().persistent().set(&DataKey::FilledOrders(order_hash.clone()), &filled_orders);
+
+    // Mark part as filled
+    env.storage().persistent().set(&DataKey::PartsFilled(order_hash.clone(), part_index), &true);
+
+    escrow_address
+}
+```
+
+#### Partial Fill Tracking and State Management
+
+The system maintains comprehensive tracking of partial fill segments across both chains:
+
+**Ethereum Partial Fill Tracking:**
+```solidity
+// From EscrowFactory.sol lines 45-50
+contract HashLockedEscrowFactory is ReentrancyGuard {
+    // Partial fill tracking
+    mapping(bytes32 => mapping(uint256 => bool)) public partialFillsUsed; // hashLock => index => used
+    mapping(bytes32 => uint256) public partialFillsCount; // hashLock => filled count
+    
+    event PartialFillExecuted(
+        bytes32 indexed hashLock,
+        uint256 indexed partIndex,
+        address indexed executor,
+        uint256 amount
+    );
+    
+    event PartialFillCompleted(
+        bytes32 indexed hashLock,
+        uint256 totalParts,
+        uint256 totalAmount
+    );
+}
+```
+
+**Stellar Partial Fill Tracking:**
+```rust
+// From limit-order-protocol/src/lib.rs lines 111-119
+pub struct FilledOrder {
+    pub order_hash: BytesN<32>,
+    pub maker: Address,
+    pub recipient: Address,
+    pub escrow_address: Address,
+    pub part_index: u64,        // Segment index
+    pub total_parts: u32,       // Total segments
+    pub is_active: bool,
+}
+```
+
+#### Cross-Chain Partial Fill Coordination
+
+Partial fill escrow creation ensures perfect coordination between chains and segments:
+
+**Coordination Requirements:**
+- **Merkle Root Consistency**: Same Merkle root used across all segments on both chains
+- **Segment Synchronization**: Each segment maintains identical partIndex and totalParts
+- **Amount Distribution**: Total order amount is evenly distributed across segments
+- **Time Lock Synchronization**: All segments use identical time lock parameters
+
+**Segment Execution Flow:**
+1. **Segment Auction**: Each segment is auctioned independently
+2. **Winner Assignment**: Different resolvers can win different segments
+3. **Escrow Creation**: Each winner creates escrows for their segment
+4. **Merkle Verification**: Withdrawal requires valid Merkle proof for the specific segment
+5. **Atomic Completion**: All segments must complete successfully for the full order
+
+**Error Handling for Partial Fills:**
+- **Duplicate Segments**: Rejected if segment index is already used
+- **Invalid Part Index**: Rejected if partIndex >= totalParts
+- **Missing Merkle Proof**: Rejected if Merkle proof is required but not provided
+- **Invalid Merkle Proof**: Rejected if Merkle proof verification fails
+- **Incomplete Segments**: Order remains active until all segments are filled
 
 ---
