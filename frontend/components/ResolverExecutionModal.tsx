@@ -39,6 +39,7 @@ interface ResolverExecutionModalProps {
   isOpen: boolean
   onClose: () => void
   auction: any
+  segmentId?: number  // For partial fill orders, specify which segment to resolve
   onExecutionComplete: () => void
 }
 
@@ -58,8 +59,16 @@ export default function ResolverExecutionModal({
   isOpen, 
   onClose, 
   auction, 
+  segmentId,
   onExecutionComplete 
 }: ResolverExecutionModalProps) {
+  
+  console.log('🔍 ResolverExecutionModal rendered with props:', {
+    isOpen,
+    auctionType: auction?.auctionType,
+    segmentId,
+    hasAuction: !!auction
+  });
   const { address, stellarWallet } = useWallet()
   const { data: walletClient } = useWalletClient()
   const [currentStep, setCurrentStep] = useState(0)
@@ -166,6 +175,12 @@ export default function ResolverExecutionModal({
 
   // Execute a specific step
   const executeStep = async (stepId: string) => {
+    console.log(`🚀 Starting execution of step: ${stepId}`, {
+      segmentId,
+      auctionType: auction?.auctionType,
+      orderId: auction?.orderId
+    });
+    
     if (!auction || isExecuting) return
 
     setCurrentExecutingStep(stepId)
@@ -302,7 +317,7 @@ export default function ResolverExecutionModal({
       resolverAddress,
       hashedSecret: auction.hashedSecret,
       isPartialFill: auction.auctionType === 'segmented',
-      segmentIndex: 0,
+      segmentIndex: auction.auctionType === 'segmented' ? ((segmentId || 1) - 1) : 0, // Convert 1-based segmentId to 0-based index
       totalParts: auction.auctionType === 'segmented' ? (auction.segments?.length || 1) : 1,
       evmSigner,
       stellarWallet: stellarWallet,
@@ -406,7 +421,7 @@ export default function ResolverExecutionModal({
       resolverAddress,
       hashedSecret: auction.hashedSecret,
       isPartialFill: auction.auctionType === 'segmented',
-      segmentIndex: 0,
+      segmentIndex: auction.auctionType === 'segmented' ? ((segmentId || 1) - 1) : 0, // Convert 1-based segmentId to 0-based index
       totalParts: auction.auctionType === 'segmented' ? (auction.segments?.length || 1) : 1,
       evmSigner,
       stellarWallet: stellarWallet,
@@ -484,13 +499,20 @@ export default function ResolverExecutionModal({
       throw new Error('Source and destination escrow addresses not available')
     }
     
+    console.log('🔍 ResolverExecutionModal segmentId debug:', {
+      segmentId,
+      auctionType: auction.auctionType,
+      isSegmented: auction.auctionType === 'segmented',
+      finalSegmentId: auction.auctionType === 'segmented' ? segmentId : undefined
+    });
+    
     const secretResult = await resolverContractManager.requestSecretFromBuyer(
       auction.orderId,
       sourceResult.escrowAddress,
       destinationResult.escrowAddress,
       sourceChain,
       destinationChain,
-      0 // segmentIndex
+      auction.auctionType === 'segmented' ? segmentId : undefined // Use actual segmentId for partial fills
     )
     
     if (!secretResult.success) {
@@ -502,10 +524,11 @@ export default function ResolverExecutionModal({
       message: 'Secret received from buyer. Proceeding with withdrawals.'
     })
     
-    // Store the secret for withdrawal steps
+    // Store the secret and merkle proof for withdrawal steps
     setExecutionDetails((prev: any) => ({
       ...prev,
-      secret: secretResult.secret
+      secret: secretResult.secret,
+      merkleProof: secretResult.merkleProof || [] // Store merkle proof for partial fills
     }))
   }
 
@@ -539,8 +562,8 @@ export default function ResolverExecutionModal({
       chainId: sourceChain,
       isSource: true,
       isPartialFill: auction.auctionType === 'segmented',
-      merkleProof: undefined,
-      segmentIndex: 0
+      merkleProof: auction.auctionType === 'segmented' ? executionDetails?.merkleProof : undefined,
+      segmentIndex: auction.auctionType === 'segmented' ? ((segmentId || 1) - 1) : 0 // Convert 1-based segmentId to 0-based index
     }
     
     const sourceWithdrawalResult = sourceChain === 'stellar-testnet'
@@ -593,8 +616,8 @@ export default function ResolverExecutionModal({
       chainId: destinationChain,
       isSource: false,
       isPartialFill: auction.auctionType === 'segmented',
-      merkleProof: undefined,
-      segmentIndex: 0
+      merkleProof: auction.auctionType === 'segmented' ? executionDetails?.merkleProof : undefined,
+      segmentIndex: auction.auctionType === 'segmented' ? ((segmentId || 1) - 1) : 0 // Convert 1-based segmentId to 0-based index
     }
     
     const destinationWithdrawalResult = destinationChain === 'stellar-testnet'

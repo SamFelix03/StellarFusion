@@ -111,6 +111,7 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
   const [connectionStatus, setConnectionStatus] = useState('disconnected')
   const [isExecutionModalOpen, setIsExecutionModalOpen] = useState(false)
   const [executingAuction, setExecutingAuction] = useState<AuctionDetails | null>(null)
+  const [executingSegmentId, setExecutingSegmentId] = useState<number | null>(null)
   const auctionClientRef = useRef<ReturnType<typeof createAuctionClient> | null>(null)
 
   // Get the current user's address for winner identification
@@ -325,6 +326,7 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
     }
     
     setSelectedAuction(details)
+    console.log('🔄 Resetting selectedSegmentId to null');
     setSelectedSegmentId(null) // Reset segment selection
     setIsModalOpen(true)
   }
@@ -556,7 +558,9 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
         } as AuctionDetails)
         setIsExecutionModalOpen(true)
       } else if (pendingConfirmation.auctionType === 'segmented') {
+        console.log('🔍 Segmented auction confirmation - selectedSegmentId:', selectedSegmentId);
         if (!selectedSegmentId) {
+          console.log('❌ No segment selected!');
           alert('Please select a segment first')
           return
         }
@@ -564,7 +568,7 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
         console.log(`🏆 Confirming segment ${selectedSegmentId} of auction ${pendingConfirmation.orderId} as winner: ${userAddress}`)
         
         // Open resolver execution modal for partial fill orders with complete data
-        setExecutingAuction({
+        const auctionDetails = {
           ...pendingConfirmation,
           // Database fields are already included in the auction object
           buyerAddress: pendingConfirmation.buyerAddress,
@@ -577,14 +581,24 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
           srcAmount: pendingConfirmation.srcAmount,
           dstAmount: pendingConfirmation.dstAmount,
           hashedSecret: pendingConfirmation.hashedSecret
-        } as AuctionDetails)
-        setIsExecutionModalOpen(true)
+        } as AuctionDetails;
+        
+        console.log('🔍 Opening ResolverExecutionModal for segmented auction:', {
+          auctionDetails,
+          selectedSegmentId,
+          auctionType: pendingConfirmation.auctionType
+        });
+        
+        setExecutingAuction(auctionDetails);
+        setExecutingSegmentId(selectedSegmentId); // Capture the segmentId before resetting
+        setIsExecutionModalOpen(true);
       }
 
       // Close confirmation modal
       setIsConfirmModalOpen(false)
       setPendingConfirmation(null)
-      setSelectedSegmentId(null) // Reset segment selection
+      console.log('🔄 Resetting selectedSegmentId to null');
+    setSelectedSegmentId(null) // Reset segment selection
     } catch (error) {
       console.error('❌ Error confirming auction:', error)
       alert('Failed to confirm auction. Please try again.')
@@ -595,6 +609,7 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
     setIsExecutionModalOpen(false)
     setIsModalOpen(false)
     setExecutingAuction(null)
+    setExecutingSegmentId(null)
     setSelectedAuction(null)
     
     toast({
@@ -979,7 +994,8 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
                              <button
                  onClick={() => {
                    setIsModalOpen(false)
-                   setSelectedSegmentId(null) // Reset segment selection
+                   console.log('🔄 Resetting selectedSegmentId to null');
+    setSelectedSegmentId(null) // Reset segment selection
                  }}
                  className="absolute top-4 right-4 z-10 p-2 rounded-full bg-white/10 hover:bg-white/20 transition-colors"
                >
@@ -1109,6 +1125,7 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
                            }`}
                            onClick={() => {
                              if (segment.status === 'active') {
+                               console.log('🔍 Setting selectedSegmentId to:', segment.id);
                                setSelectedSegmentId(segment.id)
                              }
                            }}
@@ -1241,8 +1258,17 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
        {/* Resolver Execution Modal */}
        <ResolverExecutionModal
          isOpen={isExecutionModalOpen}
-         onClose={() => setIsExecutionModalOpen(false)}
+         onClose={() => {
+           console.log('🔍 Closing ResolverExecutionModal, executingSegmentId was:', executingSegmentId);
+           setIsExecutionModalOpen(false);
+           setExecutingSegmentId(null);
+         }}
          auction={executingAuction}
+         segmentId={(() => {
+           const finalSegmentId = executingSegmentId || undefined;
+           console.log('🔍 Passing segmentId to ResolverExecutionModal:', finalSegmentId, 'from executingSegmentId:', executingSegmentId);
+           return finalSegmentId;
+         })()}
          onExecutionComplete={handleExecutionComplete}
        />
 

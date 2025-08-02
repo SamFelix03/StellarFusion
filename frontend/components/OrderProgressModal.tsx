@@ -210,7 +210,7 @@ export default function OrderProgressModal({
   }
 
   const isEVMAddress = (address: string): boolean => {
-    return address.startsWith('0x') && address.length === 42
+    return address.startsWith('0x')
   }
 
   const isStellarAddress = (address: string): boolean => {
@@ -526,6 +526,7 @@ export default function OrderProgressModal({
                     transition={{ delay: index * 0.1 }}
                     className={`p-3 rounded-lg border ${
                       segment.status === 'segment_withdrawal_completed' ? 'bg-green-500/10 border-green-500/20' :
+                      segment.status === 'segment_secret_received' ? 'bg-green-500/10 border-green-500/20' :
                       segment.status === 'segment_secret_requested' ? 'bg-blue-500/10 border-blue-500/20' :
                       segment.status === 'segment_auction_started' || segment.status === 'segment_price_update' ? 'bg-yellow-500/10 border-yellow-500/20' :
                       'bg-white/5 border-white/10'
@@ -539,6 +540,7 @@ export default function OrderProgressModal({
                       <div className="flex items-center space-x-2">
                         <span className={`text-xs px-2 py-1 rounded ${
                           segment.status === 'segment_withdrawal_completed' ? 'bg-green-500/20 text-green-400' :
+                          segment.status === 'segment_secret_received' ? 'bg-green-500/20 text-green-400' :
                           segment.status === 'segment_secret_requested' ? 'bg-blue-500/20 text-blue-400' :
                           segment.status === 'segment_auction_started' || segment.status === 'segment_price_update' ? 'bg-yellow-500/20 text-yellow-400' :
                           'bg-white/10 text-white/60'
@@ -566,6 +568,15 @@ export default function OrderProgressModal({
                             )}
                             Share
                           </Button>
+                        </div>
+                      )}
+                      {segment.status === 'segment_secret_received' && (
+                        <div className="flex items-center justify-between">
+                          <span>Secret shared with resolver</span>
+                          <div className="flex items-center space-x-1">
+                            <CheckCircle className="w-2 h-2 text-green-400" />
+                            <span className="text-green-400 text-xs">Ready for withdrawal</span>
+                          </div>
                         </div>
                       )}
                       {segment.status === 'segment_withdrawal_completed' && segment.withdrawalTxHash && (

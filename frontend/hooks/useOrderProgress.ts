@@ -60,6 +60,18 @@ export function useOrderProgress(orderId: string | null) {
             }
           }
           break
+        case 'segment_secret_received':
+          // Update segment status when secret is received
+          if (segmentId && updated.segments) {
+            const segmentIndex = updated.segments.findIndex(s => s.id === segmentId)
+            if (segmentIndex !== -1) {
+              updated.segments[segmentIndex] = {
+                ...updated.segments[segmentIndex],
+                status: 'segment_secret_received'
+              }
+            }
+          }
+          break
       }
 
       return updated
@@ -137,6 +149,27 @@ export function useOrderProgress(orderId: string | null) {
     })
   }, [orderId])
 
+  // Handle completion step with final order details
+  const handleCompletionStep = useCallback((progressOrderId: string, details: any) => {
+    if (progressOrderId !== orderId) return
+
+    setOrderProgress(prev => {
+      if (!prev) return prev
+
+      const updated: OrderProgress = { 
+        ...prev, 
+        updatedAt: Date.now(),
+        status: 'order_completed',
+        orderCompleted: details?.orderCompleted,
+        sourceWithdrawalHash: details?.sourceWithdrawalHash,
+        destinationWithdrawalHash: details?.destinationWithdrawalHash,
+        completionMessage: details?.message
+      }
+
+      return updated
+    })
+  }, [orderId])
+
   // Set up event listeners
   useEffect(() => {
     if (!auctionClient) return
@@ -145,11 +178,12 @@ export function useOrderProgress(orderId: string | null) {
     auctionClient.onEscrowCreated(handleEscrowCreated)
     auctionClient.onWithdrawalCompleted(handleWithdrawalCompleted)
     auctionClient.onOrderCompleted(handleOrderCompleted)
+    auctionClient.onCompletionStep(handleCompletionStep)
 
     return () => {
       // Cleanup would be handled by the client disconnect
     }
-  }, [auctionClient, handleResolverProgress, handleEscrowCreated, handleWithdrawalCompleted, handleOrderCompleted])
+  }, [auctionClient, handleResolverProgress, handleEscrowCreated, handleWithdrawalCompleted, handleOrderCompleted, handleCompletionStep])
 
   return {
     orderProgress,
