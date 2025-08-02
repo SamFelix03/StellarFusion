@@ -11,8 +11,8 @@
 3. [Dutch Auction](#dutch-auction)
 
 4. [Escrow Creations](#escrow-creations)
-   - [Escrow Creations in Fusion+ Swaps](#fusion-swaps-escrow)
-   - [Escrow Creations in Partial Fills](#partial-fills-escrow)
+   - [Escrow Creations in Fusion+ Swaps](#escrow-creations-in-fusion-swaps)
+   - [Escrow Creations in Partial Fills](#escrow-creations-in-partial-fills)
 
 5. [Validation and Checking](#validation-and-checking)
 
@@ -1314,5 +1314,70 @@ Partial fill escrow creation ensures perfect coordination between chains and seg
 - **Missing Merkle Proof**: Rejected if Merkle proof is required but not provided
 - **Invalid Merkle Proof**: Rejected if Merkle proof verification fails
 - **Incomplete Segments**: Order remains active until all segments are filled
+
+---
+
+## Validation and Checking
+
+### Overview
+
+Validation and Checking represents the critical verification phase in StellarFusion's cross-chain atomic swap process. After escrow creation, resolvers must notify the relayer of their escrow deployments, which then performs comprehensive verification to ensure both source and destination escrows are properly created before proceeding with the secret exchange phase.
+
+This validation process ensures the integrity of the atomic swap by verifying that:
+- Both escrows are deployed on their respective chains
+- Escrows contain the correct token amounts
+- Escrows use identical cryptographic parameters
+- Transactions are recent and valid
+
+**Verification Criteria:**
+- **Transaction Existence**: Internal transactions to escrow address
+- **Recent Activity**: Transactions within reasonable time window
+- **Address Validation**: Correct escrow contract address
+- **Funding Verification**: Account credited with destination tokens
+- **Effect Validation**: Transaction effects show proper funding
+
+### Partial Fill Validation
+
+For partial fill orders, the validation process includes segment-specific verification:
+
+**Segment Validation Requirements:**
+- **Segment ID Validation**: segmentId must be between 1 and 4
+- **Order Type Verification**: Order must be marked as "partialfill"
+- **Segment-Specific Escrows**: Each segment has independent escrow verification
+- **Merkle Tree Consistency**: All segments use the same Merkle root
+
+### Real-Time Status Updates
+
+The relayer provides real-time status updates through WebSocket events:
+
+**Escrow Created Event:**
+```javascript
+// From server.js lines 1977-1986
+const eventData = {
+  type: `${escrowType}_escrow_created`,
+  orderId: orderId,
+  escrowAddress: escrowAddress,
+  transactionHash: transactionHash,
+  segmentId: segmentId,
+  timestamp: new Date().toISOString()
+};
+
+global.auctionServer.broadcastToAll(eventData);
+```
+### Security Considerations
+
+The validation process includes multiple security measures:
+
+**Data Integrity:**
+- **Transaction Hash Verification**: All escrow notifications include transaction hashes
+- **Address Validation**: Escrow addresses are validated against blockchain state
+- **Amount Verification**: Token amounts are verified against order requirements
+- **Time Window Validation**: Only recent transactions are considered valid
+
+**Prevention of Attacks:**
+- **Double-Spending Prevention**: Verification ensures escrows are actually funded
+- **Replay Attack Prevention**: Transaction timestamps prevent old transaction reuse
+- **Invalid Escrow Prevention**: Address validation prevents fake escrow notifications
+- **Amount Manipulation Prevention**: Amount verification prevents insufficient funding
 
 ---
