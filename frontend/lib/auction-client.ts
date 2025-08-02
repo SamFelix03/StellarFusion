@@ -16,6 +16,8 @@ export interface SingleAuction {
   // Database fields (now included in all auction objects)
   hashedSecret: string
   buyerAddress: string
+  buyerEthAddress?: string
+  buyerStellarAddress?: string
   srcChainId: string
   dstChainId: string
   srcToken: string
@@ -44,6 +46,8 @@ export interface SegmentedAuction {
   // Database fields (now included in all auction objects)
   hashedSecret: string
   buyerAddress: string
+  buyerEthAddress?: string
+  buyerStellarAddress?: string
   srcChainId: string
   dstChainId: string
   srcToken: string
