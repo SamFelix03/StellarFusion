@@ -341,8 +341,7 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
   // Recalculate conversion rate when price data or tokens change
   useEffect(() => {
     if (swapState.fromAmount && swapState.fromToken && swapState.toToken && priceData) {
-      const numValue = parseFloat(swapState.fromAmount) || 0
-      
+      const numValue = parseFloat(swapState.fromAmount)
       const fromTokenId = swapState.fromToken.coingeckoId
       const toTokenId = swapState.toToken.coingeckoId
       
@@ -353,11 +352,12 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
         
         console.log("🔄 Recalculating rate due to price/token change:")
         console.log("   - Rate:", conversionRate)
-        console.log("   - New toAmount:", (numValue * conversionRate).toFixed(7))
+        console.log("   - Calculated amount:", numValue * conversionRate)
+        console.log("   - Formatted amount:", formatAmount(numValue * conversionRate))
         
         setSwapState(prev => ({
           ...prev,
-          toAmount: (numValue * conversionRate).toFixed(7)
+          toAmount: formatAmount(numValue * conversionRate)
         }))
       }
     }
@@ -400,6 +400,24 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
     }))
   }
 
+  // Helper function to format amounts with proper precision for small values
+  const formatAmount = (amount: number, decimals: number = 7): string => {
+    if (amount === 0) return "0"
+    
+    // For very small values, use scientific notation or more precision
+    if (amount < 0.0001) {
+      return amount.toExponential(4)
+    }
+    
+    // For small values, use more precision
+    if (amount < 0.01) {
+      return amount.toFixed(8)
+    }
+    
+    // For normal values, use standard precision
+    return amount.toFixed(decimals)
+  }
+
   const handleFromAmountChange = (value: string) => {
     const numValue = parseFloat(value) || 0
     
@@ -432,10 +450,14 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
       console.log("   - Missing tokens or price data, using fallback rate:", conversionRate)
     }
     
+    const calculatedAmount = numValue * conversionRate
+    console.log("   - Calculated amount:", calculatedAmount)
+    console.log("   - Formatted amount:", formatAmount(calculatedAmount))
+    
     setSwapState(prev => ({
       ...prev,
       fromAmount: value,
-      toAmount: value ? (numValue * conversionRate).toFixed(7) : ""
+      toAmount: value ? formatAmount(calculatedAmount) : ""
     }))
   }
 

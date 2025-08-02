@@ -442,10 +442,26 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
   }
 
   const formatPrice = (price: number | undefined | null) => {
-    if (price === undefined || price === null || isNaN(price)) {
-      return '0.00000'
-    }
+    if (price === undefined || price === null) return "0.00000"
     return `${price.toFixed(5)}`
+  }
+
+  // Helper function to format amounts with proper precision for small values
+  const formatAmount = (amount: number | undefined | null): string => {
+    if (amount === undefined || amount === null || amount === 0) return "0"
+    
+    // For very small values, use scientific notation or more precision
+    if (amount < 0.0001) {
+      return amount.toExponential(4)
+    }
+    
+    // For small values, use more precision
+    if (amount < 0.01) {
+      return amount.toFixed(8)
+    }
+    
+    // For normal values, use standard precision
+    return amount.toFixed(4)
   }
 
   const getAuctionProgress = (auction: Auction) => {
@@ -1134,7 +1150,7 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
                              </div>
                              <div className="flex justify-between text-xs">
                                <span className="text-white/60">Amount:</span>
-                               <span className="font-semibold text-white">{(segment.amount || 0).toFixed(4)} {selectedAuction.tokenSymbol}</span>
+                               <span className="font-semibold text-white">{formatAmount(segment.amount || 0)} {selectedAuction.tokenSymbol}</span>
                              </div>
                              {segment.winner && (
                                <div className="flex justify-between text-xs">
