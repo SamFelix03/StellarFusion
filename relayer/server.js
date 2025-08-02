@@ -132,17 +132,24 @@ class DutchAuctionServer {
             marketPrice: auction.marketPrice,
             winner: auction.winner,
             endTime: auction.endTime,
-            segments: auction.segments ? auction.segments.map(segment => ({
-              id: segment.id,
-              amount: segment.amount,
-              startPrice: segment.startPrice,
-              endPrice: segment.endPrice,
-              currentPrice: segment.currentPrice,
-              winner: segment.winner,
-              status: segment.status,
-              endTime: segment.endTime
-              // Don't include interval or other circular references
-            })) : [],
+            segments: auction.segments ? auction.segments.map(segment => {
+              // Get segment-specific status from database
+              const segmentStatuses = auction.segmentStatuses ? JSON.parse(auction.segmentStatuses) : {};
+              const segmentStatus = segmentStatuses[segment.id] || segment.status;
+              
+              return {
+                id: segment.id,
+                amount: segment.amount,
+                startPrice: segment.startPrice,
+                endPrice: segment.endPrice,
+                currentPrice: segment.currentPrice,
+                winner: segment.winner,
+                status: segmentStatus, // Use database status if available
+                endTime: segment.endTime
+                // Don't include interval or other circular references
+              };
+            }) : [],
+            segmentStatuses: auction.segmentStatuses || '{}', // Include segment statuses for frontend
             totalWinners: auction.totalWinners || [],
             // Don't include intervals array as it contains circular references
           };
@@ -195,7 +202,7 @@ class DutchAuctionServer {
           if (segment && segment.status === 'active' && !segment.winner) {
             segment.winner = data.name;
             
-            console.log(`\n🎉 SEGMENT ${segmentId} WINNER: ${data.name} confirmed at price ${Math.floor(segment.currentPrice)}!`);
+            console.log(`\n🎉 SEGMENT ${segmentId} WINNER: ${data.name} confirmed at price ${parseFloat(segment.currentPrice.toFixed(7))}!`);
             console.log(`📦 Order ID: ${confirmOrderId}`);
             console.log(`💰 Amount: ${segment.amount}`);
             
@@ -471,6 +478,8 @@ class DutchAuctionServer {
       // Include ALL database fields
       hashedSecret: orderData.hashedSecret || '',
       buyerAddress: orderData.buyerAddress || '',
+      buyerEthAddress: orderData.buyerEthAddress || '',
+      buyerStellarAddress: orderData.buyerStellarAddress || '',
       srcChainId: orderData.srcChainId || '',
       dstChainId: orderData.dstChainId || '',
       srcToken: orderData.srcToken || '',
@@ -625,8 +634,8 @@ class DutchAuctionServer {
     const slippage = parseFloat(orderData.slippage) || 0.02; // Default 2% slippage
     
     // Calculate auction parameters according to new logic
-    const startPrice = Math.floor(marketPrice * 1.2); // 1.2 x market price
-    const minimumPrice = Math.round(marketPrice * (1 - slippage)); // Market price with slippage
+    const startPrice = parseFloat((marketPrice * 1.2).toFixed(7)); // 1.2 x market price - maintain 7 decimals
+    const minimumPrice = parseFloat((marketPrice * (1 - slippage)).toFixed(7)); // Market price with slippage - maintain 7 decimals
     
     console.log(`\n🚀 Starting Single Dutch Auction for order ${orderId}`);
     console.log(`💰 Total source amount: ${sourceAmount}`);
@@ -644,6 +653,8 @@ class DutchAuctionServer {
       // Include ALL database fields
       hashedSecret: orderData.hashedSecret || '',
       buyerAddress: orderData.buyerAddress || '',
+      buyerEthAddress: orderData.buyerEthAddress || '',
+      buyerStellarAddress: orderData.buyerStellarAddress || '',
       srcChainId: orderData.srcChainId || '',
       dstChainId: orderData.dstChainId || '',
       srcToken: orderData.srcToken || '',
@@ -760,7 +771,7 @@ class DutchAuctionServer {
         market_price: auction.market_price,
         slippage: auction.slippage,
         // Auction-specific calculated fields
-        currentPrice: Math.round(auction.currentPrice * 100) / 100, // Round to 2 decimal places
+        currentPrice: parseFloat(auction.currentPrice.toFixed(7)), // Maintain 7 decimal places
         startPrice: auction.startPrice,
         endPrice: auction.minimumPrice,
         marketPrice: auction.marketPrice,
@@ -827,7 +838,7 @@ class DutchAuctionServer {
         market_price: auction.market_price,
         slippage: auction.slippage,
         // Auction-specific calculated fields
-        currentPrice: Math.round(segment.currentPrice * 100) / 100, // Round to 2 decimal places
+        currentPrice: parseFloat(segment.currentPrice.toFixed(7)), // Maintain 7 decimal places
         startPrice: segment.startPrice,
         endPrice: segment.endPrice,
         marketPrice: auction.marketPrice,
@@ -864,15 +875,15 @@ class DutchAuctionServer {
     
     console.log(`\n🏁 Segment ${segmentId} ended with status: ${status}`);
     if (segment.winner) {
-      console.log(`🎉 Winner: ${segment.winner} at price ${Math.floor(segment.currentPrice)}`);
+      console.log(`🎉 Winner: ${segment.winner} at price ${parseFloat(segment.currentPrice.toFixed(7))}`);
       auction.totalWinners.push({
         segmentId: segmentId,
         winner: segment.winner,
-        price: Math.floor(segment.currentPrice),
+        price: parseFloat(segment.currentPrice.toFixed(7)),
         amount: segment.amount,
         startPrice: segment.startPrice,
         endPrice: segment.endPrice,
-        finalPrice: Math.floor(segment.currentPrice),
+        finalPrice: parseFloat(segment.currentPrice.toFixed(7)),
         status: status,
         endTime: new Date().toISOString()
       });
@@ -881,11 +892,11 @@ class DutchAuctionServer {
       auction.totalWinners.push({
         segmentId: segmentId,
         winner: null,
-        price: Math.floor(segment.currentPrice),
+        price: parseFloat(segment.currentPrice.toFixed(7)),
         amount: segment.amount,
         startPrice: segment.startPrice,
         endPrice: segment.endPrice,
-        finalPrice: Math.floor(segment.currentPrice),
+        finalPrice: parseFloat(segment.currentPrice.toFixed(7)),
         status: status,
         endTime: new Date().toISOString()
       });
@@ -898,14 +909,14 @@ class DutchAuctionServer {
       winner: segment.winner || null, // Store null if no winner
       startPrice: segment.startPrice,
       endPrice: segment.endPrice, // This is now the minimum price
-      finalPrice: Math.floor(segment.currentPrice),
+      finalPrice: parseFloat(segment.currentPrice.toFixed(7)),
       amount: segment.amount,
       marketPrice: auction.marketPrice,
       slippage: auction.slippage,
       endTime: new Date().toISOString()
     };
     
-    this.updateOrderStatus(orderId, 'segment_completed', segment.winner || 'no_winner', Math.floor(segment.currentPrice), segmentData);
+    this.updateOrderStatus(orderId, 'segment_completed', segment.winner || 'no_winner', parseFloat(segment.currentPrice.toFixed(7)), segmentData);
     
     // Broadcast segment end
     this.broadcastToAll({
@@ -930,7 +941,7 @@ class DutchAuctionServer {
       // Auction-specific calculated fields
       status: status,
       winner: segment.winner,
-      finalPrice: Math.floor(segment.currentPrice)
+      finalPrice: parseFloat(segment.currentPrice.toFixed(7))
     });
     
     // Check if all segments are completed
@@ -980,7 +991,7 @@ class DutchAuctionServer {
       winner: segment.winner || null,
       startPrice: segment.startPrice,
       endPrice: segment.endPrice, // This is now the minimum price
-      finalPrice: Math.floor(segment.currentPrice),
+      finalPrice: parseFloat(segment.currentPrice.toFixed(7)),
       amount: segment.amount,
       marketPrice: auction.marketPrice,
       slippage: auction.slippage,
@@ -1036,15 +1047,15 @@ class DutchAuctionServer {
     
     console.log(`\n🏁 Single Auction ended with status: ${status}`);
     if (auction.winner) {
-      console.log(`🎉 Winner: ${auction.winner} at price ${Math.floor(auction.currentPrice)}`);
+      console.log(`🎉 Winner: ${auction.winner} at price ${parseFloat(auction.currentPrice.toFixed(7))}`);
     } else {
-      console.log(`⏰ Auction expired without winner at price ${Math.floor(auction.currentPrice)}`);
+      console.log(`⏰ Auction expired without winner at price ${parseFloat(auction.currentPrice.toFixed(7))}`);
     }
     
     // Prepare auction data for DynamoDB
     const auctionData = {
       winner: auction.winner || null,
-      finalPrice: Math.floor(auction.currentPrice),
+      finalPrice: parseFloat(auction.currentPrice.toFixed(7)),
       startPrice: auction.startPrice,
       endPrice: auction.minimumPrice,
       marketPrice: auction.marketPrice,
@@ -1056,7 +1067,7 @@ class DutchAuctionServer {
     };
     
     // Update order status in DynamoDB
-    this.updateOrderStatus(orderId, 'completed', auction.winner || 'no_winner', Math.floor(auction.currentPrice), auctionData);
+    this.updateOrderStatus(orderId, 'completed', auction.winner || 'no_winner', parseFloat(auction.currentPrice.toFixed(7)), auctionData);
     
     // Broadcast auction end
     this.broadcastToAll({
@@ -1080,7 +1091,7 @@ class DutchAuctionServer {
       // Auction-specific calculated fields
       status: status,
       winner: auction.winner,
-      finalPrice: Math.floor(auction.currentPrice),
+      finalPrice: parseFloat(auction.currentPrice.toFixed(7)),
       startPrice: auction.startPrice,
       endPrice: auction.minimumPrice,
       marketPrice: auction.marketPrice
@@ -1140,11 +1151,11 @@ class DutchAuctionServer {
               const timeRemaining = Math.max(0, segment.endTime - Date.now());
               const minutes = Math.floor(timeRemaining / 60000);
               const seconds = Math.floor((timeRemaining % 60000) / 1000);
-              console.log(`    Segment ${segment.id}: $${Math.floor(segment.currentPrice)} (${minutes}m ${seconds}s remaining)`);
+              console.log(`    Segment ${segment.id}: $${parseFloat(segment.currentPrice.toFixed(7))} (${minutes}m ${seconds}s remaining)`);
             }
           });
         } else if (auction.auctionType === 'single') {
-          console.log(`  - ${orderId} (Single): $${Math.floor(auction.currentPrice)} → $${auction.minimumPrice} (Market: $${auction.marketPrice})`);
+          console.log(`  - ${orderId} (Single): $${parseFloat(auction.currentPrice.toFixed(7))} → $${auction.minimumPrice} (Market: $${auction.marketPrice})`);
         }
       });
     }
@@ -1278,7 +1289,7 @@ app.post('/partialfill', async (req, res) => {
     console.log('🔐 Segment Secrets Count:', segmentSecrets ? segmentSecrets.length : 0);
     if (segmentSecrets) {
       segmentSecrets.forEach((segment, index) => {
-        console.log(`   Segment ${segment.segmentId}: Secret: ${segment.secret.slice(0, 10)}..., Hash: ${segment.hashedSecret.slice(0, 10)}...`);
+        console.log(`   Segment ${segment.segmentId}: Hash: ${segment.hashedSecret.slice(0, 10)}... (secret will be shared later)`);
       });
     }
     console.log('🔐 ========================================');
@@ -1732,7 +1743,8 @@ app.post('/orders/:orderId/segment-secret', async (req, res) => {
     const segmentSecret = {
       segmentId: segmentId,
       secret: secret,
-      hashedSecret: hashedSecret
+      hashedSecret: hashedSecret,
+      merkleProof: req.body.merkleProof || [] // Include merkle proof if provided
     };
 
     if (existingIndex >= 0) {
@@ -1745,18 +1757,24 @@ app.post('/orders/:orderId/segment-secret', async (req, res) => {
       console.log(`➕ Added new segment ${segmentId} secret`);
     }
 
-    // Update the order with the updated segment secrets
+    // Update segment status to 'segment_secret_received'
+    const existingStatuses = order.segmentStatuses ? JSON.parse(order.segmentStatuses) : {};
+    existingStatuses[segmentId] = 'segment_secret_received';
+    
+    // Update the order with the updated segment secrets and status
     const updateParams = {
       TableName: TABLE_NAME,
       Key: { orderId: orderId },
-      UpdateExpression: 'SET #segmentSecrets = :segmentSecrets, #updatedAt = :updatedAt',
+      UpdateExpression: 'SET #segmentSecrets = :segmentSecrets, #updatedAt = :updatedAt, #segmentStatuses = :segmentStatuses',
       ExpressionAttributeNames: {
         '#segmentSecrets': 'segmentSecrets',
-        '#updatedAt': 'updatedAt'
+        '#updatedAt': 'updatedAt',
+        '#segmentStatuses': 'segmentStatuses'
       },
       ExpressionAttributeValues: {
         ':segmentSecrets': JSON.stringify(segmentSecrets),
-        ':updatedAt': new Date().toISOString()
+        ':updatedAt': new Date().toISOString(),
+        ':segmentStatuses': JSON.stringify(existingStatuses)
       }
     };
 
@@ -1766,6 +1784,19 @@ app.post('/orders/:orderId/segment-secret', async (req, res) => {
     console.log(`🔐 Secret: ${secret.slice(0, 10)}...`);
     console.log(`🔐 Hashed Secret: ${hashedSecret.slice(0, 10)}...`);
     console.log(`📊 Total segment secrets: ${segmentSecrets.length}`);
+
+    // Emit WebSocket event for segment secret received
+    if (global.auctionServer) {
+      const eventData = {
+        type: 'segment_secret_received',
+        orderId: orderId,
+        segmentId: segmentId,
+        timestamp: new Date().toISOString()
+      };
+      
+      global.auctionServer.broadcastToAll(eventData);
+      console.log(`📡 Emitted segment_secret_received event for order ${orderId} segment ${segmentId}`);
+    }
 
     res.json({
       success: true,
@@ -2630,10 +2661,7 @@ app.post('/resolver/request-secret', async (req, res) => {
       console.error("❌ Error checking Stellar escrow transactions:", error.message);
     }
 
-    // === VERIFICATION RESULT ===
-    console.log(`\n📋 ESCROW VERIFICATION RESULTS:`);
-    console.log(`🔗 ${sourceChain} Source Escrow: ${ethResult ? '✅ VERIFIED' : '❌ NOT VERIFIED'}`);
-    console.log(`⭐ ${destinationChain} Destination Escrow: ${xlmResult ? '✅ VERIFIED' : '❌ NOT VERIFIED'}`);
+
 
     // Determine which verifications are required based on chain types
     const requiresEthereumVerification = sourceChain === 'Sepolia Testnet';
@@ -2694,19 +2722,52 @@ app.post('/resolver/request-secret', async (req, res) => {
     console.log(`🔑 Both escrows verified! Proceeding with secret request...`);
 
     // Update order status to indicate secret is requested
-    const updateParams = {
-      TableName: TABLE_NAME,
-      Key: { orderId: orderId },
-      UpdateExpression: 'SET #status = :status, #updatedAt = :updatedAt',
-      ExpressionAttributeNames: {
-        '#status': 'status',
-        '#updatedAt': 'updatedAt'
-      },
-      ExpressionAttributeValues: {
-        ':status': segmentId ? 'segment_secret_requested' : 'secret_requested',
-        ':updatedAt': new Date().toISOString()
-      }
-    };
+    let updateParams;
+    
+    if (segmentId) {
+      // For partial fills, update segment-specific status
+      console.log(`📊 Updating segment ${segmentId} status to 'segment_secret_requested'`);
+      
+      // Get current segmentStatuses or initialize empty object
+      const currentOrder = await dynamodb.get({
+        TableName: TABLE_NAME,
+        Key: { orderId: orderId }
+      }).promise();
+      
+      const existingStatuses = currentOrder.Item?.segmentStatuses ? JSON.parse(currentOrder.Item.segmentStatuses) : {};
+      existingStatuses[segmentId] = 'segment_secret_requested';
+      
+      updateParams = {
+        TableName: TABLE_NAME,
+        Key: { orderId: orderId },
+        UpdateExpression: 'SET #status = :status, #updatedAt = :updatedAt, #segmentStatuses = :segmentStatuses',
+        ExpressionAttributeNames: {
+          '#status': 'status',
+          '#updatedAt': 'updatedAt',
+          '#segmentStatuses': 'segmentStatuses'
+        },
+        ExpressionAttributeValues: {
+          ':status': 'segment_secret_requested',
+          ':updatedAt': new Date().toISOString(),
+          ':segmentStatuses': JSON.stringify(existingStatuses)
+        }
+      };
+    } else {
+      // For single fills, update order-level status
+      updateParams = {
+        TableName: TABLE_NAME,
+        Key: { orderId: orderId },
+        UpdateExpression: 'SET #status = :status, #updatedAt = :updatedAt',
+        ExpressionAttributeNames: {
+          '#status': 'status',
+          '#updatedAt': 'updatedAt'
+        },
+        ExpressionAttributeValues: {
+          ':status': 'secret_requested',
+          ':updatedAt': new Date().toISOString()
+        }
+      };
+    }
 
     await dynamodb.update(updateParams).promise();
 

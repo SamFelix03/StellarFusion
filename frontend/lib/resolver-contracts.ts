@@ -3,6 +3,24 @@ import { toast } from '@/hooks/use-toast'
 import { chainsConfig } from '@/constants/chains'
 import { fetchHashedSecretFromDatabase } from './order-utils'
 import { GasValuesOverflowError } from 'viem/account-abstraction'
+import {
+  rpc,
+  TransactionBuilder,
+  Networks,
+  Operation,
+  Address,
+  nativeToScVal,
+  xdr,
+  Transaction
+} from "@stellar/stellar-sdk"
+
+// Import Freighter API functions
+import {
+  signTransaction,
+  getAddress,
+  getNetwork,
+  isConnected
+} from "@stellar/freighter-api"
 
 // Contract ABIs for source escrow creation
 const lopABI = [
@@ -51,6 +69,8 @@ export interface ResolverOrderExecution {
   sourceAmount: string
   destinationAmount: string
   buyerAddress: string
+  buyerEthAddress: string
+  buyerStellarAddress: string
   resolverAddress: string // The connected wallet address of the resolver (user)
   hashedSecret: string
   isPartialFill: boolean
@@ -59,7 +79,7 @@ export interface ResolverOrderExecution {
   merkleProof?: string[]
   // Signer objects for transaction execution
   evmSigner?: ethers.Wallet | ethers.Signer
-  stellarKeypair?: any // Stellar keypair object
+  stellarWallet?: any // Stellar wallet object (Freighter)
   stellarSecretKey?: string // Stellar secret key for CLI operations
 }
 
@@ -393,14 +413,14 @@ export class ResolverContractManager {
     }
   }
 
-  // Create Source Escrow (Stellar) - Using Next.js API route with connected wallet
+  // Create Source Escrow (Stellar) - Using Stellar SDK directly
   async createSourceEscrowStellar(
     chainId: string,
     params: SourceEscrowParams,
     stellarWallet?: any
   ): Promise<ExecutionResult> {
     try {
-      console.log('🌟 Creating Stellar source escrow via API...')
+      console.log('🌟 Creating Stellar source escrow via SDK...')
       console.log('📋 Parameters:', params)
       console.log('👛 Stellar Wallet:', stellarWallet)
       
@@ -410,7 +430,7 @@ export class ResolverContractManager {
       }
       
       const config = CHAIN_CONFIGS[chainId as keyof typeof CHAIN_CONFIGS]
-      if (!config || !config.lopAddress) {
+      if (!config || !config.factoryAddress) {
         throw new Error(`Stellar LOP address not configured for chain: ${chainId}`)
       }
       
@@ -426,8 +446,8 @@ export class ResolverContractManager {
       console.log("🔍 Debug - Parameters being passed:")
       console.log(`  creator: ${stellarWallet.publicKey}`)
       console.log(`  hashed_secret: ${params.hashedSecret}`)
-      console.log(`  recipient: ${stellarWallet.publicKey}`)
-      console.log(`  buyer: ${params.buyerAddress}`)
+      console.log(`  recipient: ${stellarWallet.publicKey} (resolver gets the source tokens)`)
+      console.log(`  buyer: ${params.buyerAddress} (buyer provides the tokens)`)
       console.log(`  token_amount: ${amountInStroops} (${params.srcAmount} XLM)`)
       console.log(`  withdrawal_start: ${timeWindows.withdrawalStart}`)
       console.log(`  public_withdrawal_start: ${timeWindows.publicWithdrawalStart}`)
@@ -436,62 +456,124 @@ export class ResolverContractManager {
       console.log(`  part_index: ${actualPartIndex}`)
       console.log(`  total_parts: ${actualTotalParts}`)
       
-      // Call Next.js API route with wallet information
-      const apiParams = {
-        contractAddress: config.lopAddress,
-        creator: stellarWallet.publicKey,
-        hashedSecret: params.hashedSecret.slice(2),
-        recipient: stellarWallet.publicKey,
-        buyer: params.buyerAddress,
-        tokenAmount: amountInStroops,
-        withdrawalStart: timeWindows.withdrawalStart,
-        publicWithdrawalStart: timeWindows.publicWithdrawalStart,
-        cancellationStart: timeWindows.cancellationStart,
-        publicCancellationStart: timeWindows.publicCancellationStart,
-        partIndex: actualPartIndex,
-        totalParts: actualTotalParts
+      // Initialize server and contract
+      const server = new rpc.Server("https://soroban-testnet.stellar.org");
+      const contractId = config.factoryAddress;
+      
+      console.log('🔑 Using connected Freighter wallet for source escrow creation');
+      console.log('📋 Contract ID:', contractId);
+      console.log('📋 Resolver Address:', stellarWallet.publicKey);
+      
+      // Get account details
+      const account = await server.getAccount(stellarWallet.publicKey);
+      
+      // Prepare arguments based on function type
+      let args: any[];
+      if (action === 'create_src_escrow') {
+        // Convert hashed secret from hex string to bytes (same as working test)
+        const hashedSecretBytes = Buffer.from(params.hashedSecret.slice(2), 'hex'); // Remove '0x' prefix
+        console.log('🔍 Hashed secret conversion:');
+        console.log('  Original:', params.hashedSecret);
+        console.log('  After slice(2):', params.hashedSecret.slice(2));
+        console.log('  As Buffer:', hashedSecretBytes);
+        console.log('  Buffer length:', hashedSecretBytes.length);
+        
+        // Match the exact parameter order from the working test
+        args = [
+          new Address(stellarWallet.publicKey).toScVal(), // creator
+          nativeToScVal(hashedSecretBytes, { type: "bytes" }), // hashed_secret
+          new Address(stellarWallet.publicKey).toScVal(), // recipient
+          new Address(params.buyerAddress).toScVal(), // buyer
+          nativeToScVal(amountInStroops, { type: "i128" }), // token_amount
+          nativeToScVal(timeWindows.withdrawalStart, { type: "u64" }), // withdrawal_start
+          nativeToScVal(timeWindows.publicWithdrawalStart, { type: "u64" }), // public_withdrawal_start
+          nativeToScVal(timeWindows.cancellationStart, { type: "u64" }), // cancellation_start
+          nativeToScVal(timeWindows.publicCancellationStart, { type: "u64" }) // public_cancellation_start
+        ];
+      } else {
+        // Convert hashed secret from hex string to bytes (same as working test)
+        const hashedSecretBytes = Buffer.from(params.hashedSecret.slice(2), 'hex'); // Remove '0x' prefix
+        console.log('🔍 Hashed secret conversion (partial):');
+        console.log('  Original:', params.hashedSecret);
+        console.log('  After slice(2):', params.hashedSecret.slice(2));
+        console.log('  As Buffer:', hashedSecretBytes);
+        console.log('  Buffer length:', hashedSecretBytes.length);
+        
+        // create_src_escrow_partial
+        args = [
+          new Address(stellarWallet.publicKey).toScVal(), // creator
+          nativeToScVal(hashedSecretBytes, { type: "bytes" }), // hashed_secret
+          new Address(stellarWallet.publicKey).toScVal(), // recipient
+          new Address(params.buyerAddress).toScVal(), // buyer
+          nativeToScVal(amountInStroops, { type: "i128" }), // token_amount
+          nativeToScVal(timeWindows.withdrawalStart, { type: "u64" }), // withdrawal_start
+          nativeToScVal(timeWindows.publicWithdrawalStart, { type: "u64" }), // public_withdrawal_start
+          nativeToScVal(timeWindows.cancellationStart, { type: "u64" }), // cancellation_start
+          nativeToScVal(actualPartIndex, { type: "u64" }), // part_index
+          nativeToScVal(actualTotalParts, { type: "u32" }) // total_parts
+        ];
       }
       
-      const response = await fetch('/api/stellar', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          action,
-          params: apiParams,
-          walletInfo: {
-            publicKey: stellarWallet.publicKey,
-            isConnected: stellarWallet.isConnected,
-            network: stellarWallet.network
-          }
-        })
+      // Create transaction
+      const tx = new TransactionBuilder(account, {
+        fee: "100000",
+        networkPassphrase: Networks.TESTNET,
       })
+        .addOperation(Operation.invokeContractFunction({
+          contract: contractId,
+          function: action,
+          args: args,
+        }))
+        .setTimeout(30)
+        .build();
+
+      // Prepare transaction
+      const preparedTx = await server.prepareTransaction(tx);
       
-      if (!response.ok) {
-        const errorData = await response.json()
-        throw new Error(`API call failed: ${errorData.error}`)
+      // Instead of preparedTx.sign(keypair), use Freighter's signTransaction
+      console.log('📝 Requesting signature from Freighter...');
+      const signResult = await signTransaction(preparedTx.toXDR(), {
+        networkPassphrase: Networks.TESTNET,
+        address: stellarWallet.publicKey
+      });
+      
+      if (signResult.error) {
+        throw new Error(`Failed to sign transaction: ${signResult.error}`);
       }
       
-      const result = await response.json()
+      console.log('✅ Transaction signed by Freighter wallet');
+      console.log('👛 Signer address:', signResult.signerAddress);
       
-      console.log('✅ Stellar source escrow created successfully!')
-      console.log(`📋 Result: ${result.result}`)
+      // Create a signed transaction object from the signed XDR (equivalent to preparedTx.sign())
+      const signedTx = xdr.TransactionEnvelope.fromXDR(signResult.signedTxXdr, 'base64');
+      
+      // Convert the XDR object back to a Transaction object that server.sendTransaction() expects
+      const signedTransaction = new Transaction(signedTx, Networks.TESTNET);
+      
+      // Send transaction
+      console.log('📝 Sending source escrow creation transaction...');
+      const response = await server.sendTransaction(signedTransaction);
+      
+      console.log('✅ Stellar source escrow created successfully!');
+      console.log('📋 Transaction Hash:', response.hash);
+      console.log('📋 Function Used:', action);
+      console.log('📋 Resolver Address:', signResult.signerAddress);
+      console.log('📋 Contract address:', contractId);
       
       return {
         success: true,
-        escrowAddress: result.details.escrowAddress,
-        transactionHash: result.details.transactionHash,
+        escrowAddress: contractId, // In Stellar, the contract address is the escrow address
+        transactionHash: response.hash,
         message: 'Source escrow created successfully',
         details: {
           orderId: params.orderId,
           buyerAddress: params.buyerAddress,
-          resolverAddress: stellarWallet.publicKey,
+          resolverAddress: signResult.signerAddress,
           amount: params.srcAmount,
           hashedSecret: params.hashedSecret,
           functionUsed: action,
           timeWindows,
-          walletAddress: result.details.walletAddress
+          walletAddress: signResult.signerAddress
         }
       }
       
@@ -612,7 +694,7 @@ export class ResolverContractManager {
     }
   }
 
-  // Create Destination Escrow (Stellar) - Using Next.js API route with connected wallet
+  // Create Destination Escrow (Stellar) - Using Stellar SDK directly
   async createDestinationEscrowStellar(
     chainId: string,
     hashedSecret: string,
@@ -624,7 +706,7 @@ export class ResolverContractManager {
     totalParts?: number
   ): Promise<ExecutionResult> {
     try {
-      console.log('🌟 Creating Stellar destination escrow via API...')
+      console.log('🌟 Creating Stellar destination escrow via SDK...')
       
       // Validate wallet connection
       if (!stellarWallet || !stellarWallet.publicKey) {
@@ -656,49 +738,94 @@ export class ResolverContractManager {
       console.log(`  part_index: ${actualPartIndex}`)
       console.log(`  total_parts: ${actualTotalParts}`)
       
-      // Call Next.js API route with wallet information
-      const apiParams = {
-        contractAddress: config.factoryAddress,
-        hashedSecret: hashedSecret.slice(2),
-        recipient: buyerAddress,
-        tokenAmount: amountInStroops,
-        withdrawalStart: timeWindows.withdrawalStart,
-        publicWithdrawalStart: timeWindows.publicWithdrawalStart,
-        cancellationStart: timeWindows.cancellationStart,
-        partIndex: actualPartIndex,
-        totalParts: actualTotalParts
+      // Initialize server and contract
+      const server = new rpc.Server("https://soroban-testnet.stellar.org");
+      const contractId = config.factoryAddress;
+      
+      console.log('🔑 Using connected Freighter wallet for destination escrow creation');
+      console.log('📋 Contract ID:', contractId);
+      console.log('📋 Resolver Address:', stellarWallet.publicKey);
+      
+      // Get account details
+      const account = await server.getAccount(stellarWallet.publicKey);
+      
+      // Prepare arguments based on function type
+      let args: any[];
+      if (action === 'create_dst_escrow') {
+        args = [
+          new Address(stellarWallet.publicKey).toScVal(), // creator
+          nativeToScVal(Buffer.from(hashedSecret.slice(2), 'hex'), { type: "bytes" }), // hashed_secret
+          new Address(buyerAddress).toScVal(), // recipient
+          nativeToScVal(amountInStroops, { type: "i128" }), // token_amount
+          nativeToScVal(timeWindows.withdrawalStart, { type: "u64" }), // withdrawal_start
+          nativeToScVal(timeWindows.publicWithdrawalStart, { type: "u64" }), // public_withdrawal_start
+          nativeToScVal(timeWindows.cancellationStart, { type: "u64" }) // cancellation_start
+        ];
+      } else {
+        // create_dst_escrow_partial
+        args = [
+          new Address(stellarWallet.publicKey).toScVal(), // creator
+          nativeToScVal(Buffer.from(hashedSecret.slice(2), 'hex'), { type: "bytes" }), // hashed_secret
+          new Address(buyerAddress).toScVal(), // recipient
+          nativeToScVal(amountInStroops, { type: "i128" }), // token_amount
+          nativeToScVal(timeWindows.withdrawalStart, { type: "u64" }), // withdrawal_start
+          nativeToScVal(timeWindows.publicWithdrawalStart, { type: "u64" }), // public_withdrawal_start
+          nativeToScVal(timeWindows.cancellationStart, { type: "u64" }), // cancellation_start
+          nativeToScVal(actualPartIndex, { type: "u64" }), // part_index
+          nativeToScVal(actualTotalParts, { type: "u32" }) // total_parts
+        ];
       }
       
-      const response = await fetch('/api/stellar', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          action,
-          params: apiParams,
-          walletInfo: {
-            publicKey: stellarWallet.publicKey,
-            isConnected: stellarWallet.isConnected,
-            network: stellarWallet.network
-          }
-        })
+      // Create transaction
+      const tx = new TransactionBuilder(account, {
+        fee: "100000",
+        networkPassphrase: Networks.TESTNET,
       })
+        .addOperation(Operation.invokeContractFunction({
+          contract: contractId,
+          function: action,
+          args: args,
+        }))
+        .setTimeout(30)
+        .build();
+
+      // Prepare transaction
+      const preparedTx = await server.prepareTransaction(tx);
       
-      if (!response.ok) {
-        const errorData = await response.json()
-        throw new Error(`API call failed: ${errorData.error}`)
+      // Instead of preparedTx.sign(keypair), use Freighter's signTransaction
+      console.log('📝 Requesting signature from Freighter...');
+      const signResult = await signTransaction(preparedTx.toXDR(), {
+        networkPassphrase: Networks.TESTNET,
+        address: stellarWallet.publicKey
+      });
+      
+      if (signResult.error) {
+        throw new Error(`Failed to sign transaction: ${signResult.error}`);
       }
       
-      const result = await response.json()
+      console.log('✅ Transaction signed by Freighter wallet');
+      console.log('👛 Signer address:', signResult.signerAddress);
       
-      console.log('✅ Stellar destination escrow created successfully!')
-      console.log(`📋 Result: ${result.result}`)
+      // Create a signed transaction object from the signed XDR (equivalent to preparedTx.sign())
+      const signedTx = xdr.TransactionEnvelope.fromXDR(signResult.signedTxXdr, 'base64');
+      
+      // Convert the XDR object back to a Transaction object that server.sendTransaction() expects
+      const signedTransaction = new Transaction(signedTx, Networks.TESTNET);
+      
+      // Send transaction
+      console.log('📝 Sending destination escrow creation transaction...');
+      const response = await server.sendTransaction(signedTransaction);
+      
+      console.log('✅ Stellar destination escrow created successfully!');
+      console.log('📋 Transaction Hash:', response.hash);
+      console.log('📋 Function Used:', action);
+      console.log('📋 Resolver Address:', signResult.signerAddress);
+      console.log('📋 Contract address:', contractId);
       
       return {
         success: true,
-        escrowAddress: result.details.escrowAddress,
-        transactionHash: result.details.transactionHash,
+        escrowAddress: contractId, // In Stellar, the contract address is the escrow address
+        transactionHash: response.hash,
         message: 'Destination escrow created successfully',
         details: {
           buyerAddress,
@@ -706,7 +833,7 @@ export class ResolverContractManager {
           hashedSecret,
           functionUsed: action,
           timeWindows,
-          walletAddress: result.details.walletAddress
+          walletAddress: signResult.signerAddress
         }
       }
       
@@ -924,13 +1051,14 @@ export class ResolverContractManager {
     }
   }
 
-  // Withdraw from Stellar escrow using secret and API with connected wallet
+  // Withdraw from Stellar escrow using secret and SDK with connected wallet
+  // Implementation now matches dynamic-swap.ts exactly for merkle proof handling
   async withdrawFromStellarEscrow(
     params: WithdrawalParams,
     stellarWallet?: any
   ): Promise<ExecutionResult> {
     try {
-      console.log('🌟 Withdrawing from Stellar escrow via API...')
+      console.log('🌟 Withdrawing from Stellar escrow via SDK...')
       console.log('📋 Parameters:', params)
       console.log('👛 Stellar Wallet:', stellarWallet)
       
@@ -948,7 +1076,7 @@ export class ResolverContractManager {
       const isSource = params.isSource
       let action = isSource ? 'withdraw_src_escrow' : 'withdraw_dst_escrow'
       
-      // If partial fill, use the proof-based method
+      // If partial fill, use the proof-based method (matching dynamic-swap.ts)
       if (params.isPartialFill && params.merkleProof && params.merkleProof.length > 0) {
         action = isSource ? 'withdraw_src_escrow_with_proof' : 'withdraw_dst_escrow_with_proof'
       }
@@ -961,55 +1089,107 @@ export class ResolverContractManager {
       console.log(`  is_partial_fill: ${params.isPartialFill}`)
       if (params.merkleProof && params.merkleProof.length > 0) {
         console.log(`  merkle_proof_length: ${params.merkleProof.length}`)
+        console.log(`  merkle_proof_elements: ${params.merkleProof.map(p => p.slice(0, 10) + '...')}`)
       }
       
-      // Call Next.js API route with wallet information
-      const apiParams: any = {
-        contractAddress: config.factoryAddress,
-        escrowAddress: params.escrowAddress,
-        secret: params.secret.slice(2)
-      }
+      // Initialize server and contract
+      const server = new rpc.Server("https://soroban-testnet.stellar.org");
+      const contractId = config.factoryAddress;
       
-      // Add merkle proof if partial fill
-      if (params.isPartialFill && params.merkleProof && params.merkleProof.length > 0) {
-        const proofArray = params.merkleProof.map(p => `"${p.slice(2)}"`) // Remove 0x prefix and add quotes
-        const proofStr = `[ ${proofArray.join(', ')} ]`
-        apiParams.merkleProof = proofStr
-        console.log(`🔍 Partial fill withdrawal with merkle proof (${params.merkleProof.length} elements)`)
-        console.log(`   Proof format: ${proofStr}`)
+      console.log('🔑 Using connected Freighter wallet for withdrawal');
+      console.log('📋 Contract ID:', contractId);
+      console.log('📋 Caller Address:', stellarWallet.publicKey);
+      console.log('📋 Action:', action);
+      
+      // Get account details
+      const account = await server.getAccount(stellarWallet.publicKey);
+      
+      // Prepare arguments based on withdrawal type - matching dynamic-swap.ts format exactly
+      let args: any[];
+      if (action === 'withdraw_src_escrow' || action === 'withdraw_dst_escrow') {
+        // Single fill withdrawal
+        args = [
+          new Address(stellarWallet.publicKey).toScVal(), // caller
+          new Address(params.escrowAddress).toScVal(), // escrow_address
+          nativeToScVal(Buffer.from(params.secret.slice(2), 'hex'), { type: "bytes" }) // secret
+        ];
+        console.log('🔍 Single fill withdrawal arguments prepared');
       } else {
-        console.log(`🔍 Single fill withdrawal (no merkle proof needed)`)
+        // Partial fill withdrawal with merkle proof - matching dynamic-swap.ts exactly
+        // Convert merkle proof to proper format - each element as bytes32
+        const proofElements = params.merkleProof!.map(proofElement => {
+          // Remove 0x prefix and convert to Buffer, then to ScVal
+          const proofBuffer = Buffer.from(proofElement.slice(2), 'hex');
+          return nativeToScVal(proofBuffer, { type: "bytes" });
+        });
+        
+        // Create Vector of the proof elements
+        const merkleProofVec = nativeToScVal(proofElements, { type: "vec" });
+        
+        args = [
+          new Address(stellarWallet.publicKey).toScVal(), // caller
+          new Address(params.escrowAddress).toScVal(), // escrow_address
+          nativeToScVal(Buffer.from(params.secret.slice(2), 'hex'), { type: "bytes" }), // secret
+          merkleProofVec // merkle_proof as Vec<BytesN<32>>
+        ];
+        
+        console.log('🔍 Partial fill withdrawal with merkle proof arguments prepared');
+        console.log(`   Proof elements count: ${params.merkleProof!.length}`);
+        console.log(`   Each proof element length: ${params.merkleProof![0]?.length} chars`);
       }
       
-      const response = await fetch('/api/stellar', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          action,
-          params: apiParams,
-          walletInfo: {
-            publicKey: stellarWallet.publicKey,
-            isConnected: stellarWallet.isConnected,
-            network: stellarWallet.network
-          }
-        })
+      // Create transaction
+      const tx = new TransactionBuilder(account, {
+        fee: "100000",
+        networkPassphrase: Networks.TESTNET,
       })
+        .addOperation(Operation.invokeContractFunction({
+          contract: contractId,
+          function: action,
+          args: args,
+        }))
+        .setTimeout(30)
+        .build();
+
+      // Prepare transaction
+      const preparedTx = await server.prepareTransaction(tx);
       
-      if (!response.ok) {
-        const errorData = await response.json()
-        throw new Error(`API call failed: ${errorData.error}`)
+      // Instead of preparedTx.sign(keypair), use Freighter's signTransaction
+      console.log('📝 Requesting signature from Freighter...');
+      const signResult = await signTransaction(preparedTx.toXDR(), {
+        networkPassphrase: Networks.TESTNET,
+        address: stellarWallet.publicKey
+      });
+      
+      if (signResult.error) {
+        throw new Error(`Failed to sign transaction: ${signResult.error}`);
       }
       
-      const result = await response.json()
+      console.log('✅ Transaction signed by Freighter wallet');
+      console.log('👛 Signer address:', signResult.signerAddress);
       
-      console.log('✅ Stellar escrow withdrawal completed successfully!')
-      console.log(`📋 Result: ${result.result}`)
+      // Create a signed transaction object from the signed XDR (equivalent to preparedTx.sign())
+      const signedTx = xdr.TransactionEnvelope.fromXDR(signResult.signedTxXdr, 'base64');
+      
+      // Convert the XDR object back to a Transaction object that server.sendTransaction() expects
+      const signedTransaction = new Transaction(signedTx, Networks.TESTNET);
+      
+      // Send transaction
+      console.log('📝 Sending withdrawal transaction...');
+      const response = await server.sendTransaction(signedTransaction);
+      
+      console.log('✅ Stellar escrow withdrawal completed successfully!');
+      console.log('📋 Transaction Hash:', response.hash);
+      console.log('📋 Function Used:', action);
+      console.log('📋 Caller Address:', signResult.signerAddress);
+      console.log('📋 Contract address:', contractId);
+      if (params.isPartialFill) {
+        console.log('📋 Merkle proof used for partial fill withdrawal');
+      }
       
       return {
         success: true,
-        transactionHash: result.details.transactionHash,
+        transactionHash: response.hash,
         message: 'Withdrawal completed successfully',
         details: {
           escrowAddress: params.escrowAddress,
@@ -1017,7 +1197,8 @@ export class ResolverContractManager {
           isPartialFill: params.isPartialFill,
           methodUsed: action,
           segmentIndex: params.segmentIndex,
-          walletAddress: result.details.walletAddress
+          walletAddress: signResult.signerAddress,
+          merkleProofUsed: params.isPartialFill && params.merkleProof && params.merkleProof.length > 0
         }
       }
       
@@ -1074,15 +1255,6 @@ export class ResolverContractManager {
     destinationParams: WithdrawalParams
   ): Promise<{ source: ExecutionResult; destination: ExecutionResult }> {
     throw new Error('executeWithdrawals deprecated - use executeWithdrawalsWithSigners with proper signers')
-  }
-
-  // Get the correct buyer address for a specific chain
-  getBuyerAddressForChain(orderData: any, chainId: string): string {
-    if (chainId === 'stellar-testnet') {
-      return orderData.buyerStellarAddress || orderData.buyerAddress
-    } else {
-      return orderData.buyerEthAddress || orderData.buyerAddress
-    }
   }
 
   // Helper method to create destination escrow based on chain type
@@ -1167,7 +1339,7 @@ export class ResolverContractManager {
       }
       
       const sourceResult = orderExecution.sourceChain === 'stellar-testnet'
-        ? await this.createSourceEscrowStellar(orderExecution.sourceChain, sourceParams, orderExecution.stellarKeypair)
+        ? await this.createSourceEscrowStellar(orderExecution.sourceChain, sourceParams, orderExecution.stellarWallet)
         : await this.createSourceEscrowEVM(orderExecution.sourceChain, sourceParams, orderExecution.evmSigner!)
       if (!sourceResult.success) {
         onProgressUpdate?.('source-escrow', 'failed', { error: sourceResult.error })
@@ -1189,7 +1361,7 @@ export class ResolverContractManager {
             orderExecution.hashedSecret,
             orderExecution.buyerAddress,
             orderExecution.destinationAmount,
-            orderExecution.stellarKeypair,
+            orderExecution.stellarWallet,
             orderExecution.isPartialFill,
             orderExecution.segmentIndex,
             orderExecution.totalParts
@@ -1294,7 +1466,7 @@ export class ResolverContractManager {
         sourceWithdrawalParams,
         destinationWithdrawalParams,
         orderExecution.evmSigner,
-        orderExecution.stellarKeypair
+        orderExecution.stellarWallet
       )
       
       if (!withdrawalResults.source.success || !withdrawalResults.destination.success) {
@@ -1354,11 +1526,27 @@ export class ResolverContractManager {
     sourceChain: string,
     destinationChain: string,
     segmentId?: number
-  ): Promise<ExecutionResult & { secret?: string }> {
+  ): Promise<ExecutionResult & { secret?: string, merkleProof?: string[] }> {
     try {
       console.log('🔑 Requesting secret from buyer for order:', orderId, segmentId ? `segment ${segmentId}` : '')
       console.log('🔗 Source escrow address:', sourceEscrowAddress, `(${sourceChain})`)
       console.log('🔗 Destination escrow address:', destinationEscrowAddress, `(${destinationChain})`)
+      console.log('🔍 SegmentId parameter:', segmentId, 'Type:', typeof segmentId)
+      
+      const requestBody: any = {
+        orderId,
+        sourceEscrowAddress,
+        destinationEscrowAddress,
+        sourceChain,
+        destinationChain
+      };
+      
+      // Only include segmentId if it's a valid number
+      if (segmentId !== undefined && segmentId !== null) {
+        requestBody.segmentId = segmentId;
+      }
+      
+      console.log('📤 Request body being sent:', JSON.stringify(requestBody, null, 2));
       
       // Step 1: Request secret from relayer with actual escrow addresses and chain information
       const requestResponse = await fetch(`http://localhost:8000/resolver/request-secret`, {
@@ -1366,18 +1554,13 @@ export class ResolverContractManager {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          orderId,
-          segmentId,
-          sourceEscrowAddress,
-          destinationEscrowAddress,
-          sourceChain,
-          destinationChain
-        })
+        body: JSON.stringify(requestBody)
       });
 
       if (!requestResponse.ok) {
-        throw new Error(`Failed to request secret: ${requestResponse.statusText}`);
+        const errorText = await requestResponse.text();
+        console.error('❌ Secret request failed:', requestResponse.status, errorText);
+        throw new Error(`Failed to request secret: ${requestResponse.statusText} - ${errorText}`);
       }
       
       console.log('📞 Secret request sent to relayer successfully')
@@ -1403,9 +1586,11 @@ export class ResolverContractManager {
               const segmentSecret = segmentSecrets.find((s: any) => s.segmentId === segmentId)
               if (segmentSecret && segmentSecret.secret) {
                 console.log('✅ Segment secret received from buyer')
+                console.log(`   Merkle proof elements: ${segmentSecret.merkleProof?.length || 0}`)
                 return {
                   success: true,
                   secret: segmentSecret.secret,
+                  merkleProof: segmentSecret.merkleProof || [], // Include merkle proof
                   message: `Segment ${segmentId} secret received successfully`
                 }
               }

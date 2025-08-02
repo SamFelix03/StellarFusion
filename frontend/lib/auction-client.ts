@@ -86,6 +86,7 @@ export interface AuctionClient {
   onEscrowCreated(callback: (orderId: string, escrowType: string, escrowAddress: string, transactionHash: string, segmentId?: number) => void): void
   onWithdrawalCompleted(callback: (orderId: string, withdrawalType: string, transactionHash: string, segmentId?: number) => void): void
   onOrderCompleted(callback: (orderId: string, segmentId?: number) => void): void
+  onCompletionStep(callback: (orderId: string, details: any) => void): void
 }
 
 class DutchAuctionClient implements AuctionClient {
@@ -105,6 +106,7 @@ class DutchAuctionClient implements AuctionClient {
   private escrowCreatedCallbacks: ((orderId: string, escrowType: string, escrowAddress: string, transactionHash: string, segmentId?: number) => void)[] = []
   private withdrawalCompletedCallbacks: ((orderId: string, withdrawalType: string, transactionHash: string, segmentId?: number) => void)[] = []
   private orderCompletedCallbacks: ((orderId: string, segmentId?: number) => void)[] = []
+  private completionStepCallbacks: ((orderId: string, details: any) => void)[] = []
 
   constructor(clientName: string = 'frontend-client') {
     this.clientName = clientName
@@ -247,6 +249,8 @@ class DutchAuctionClient implements AuctionClient {
             // Database fields (now included in all auction objects)
             hashedSecret: data.hashedSecret || '',
             buyerAddress: data.buyerAddress || '',
+            buyerEthAddress: data.buyerEthAddress || '',
+            buyerStellarAddress: data.buyerStellarAddress || '',
             srcChainId: data.srcChainId || '',
             dstChainId: data.dstChainId || '',
             srcToken: data.srcToken || '',
@@ -283,6 +287,8 @@ class DutchAuctionClient implements AuctionClient {
              // Database fields (now included in all auction objects)
              hashedSecret: data.hashedSecret || '',
              buyerAddress: data.buyerAddress || '',
+             buyerEthAddress: data.buyerEthAddress || '',
+             buyerStellarAddress: data.buyerStellarAddress || '',
              srcChainId: data.srcChainId || '',
              dstChainId: data.dstChainId || '',
              srcToken: data.srcToken || '',
@@ -316,6 +322,8 @@ class DutchAuctionClient implements AuctionClient {
             // Database fields (now included in all auction objects)
             hashedSecret: data.hashedSecret || '',
             buyerAddress: data.buyerAddress || '',
+            buyerEthAddress: data.buyerEthAddress || '',
+            buyerStellarAddress: data.buyerStellarAddress || '',
             srcChainId: data.srcChainId || '',
             dstChainId: data.dstChainId || '',
             srcToken: data.srcToken || '',
@@ -430,6 +438,20 @@ class DutchAuctionClient implements AuctionClient {
         })
         break
 
+      case 'segment_secret_received':
+        console.log('✅ Segment secret received:', data.orderId, 'Segment:', data.segmentId)
+        this.resolverProgressCallbacks.forEach(callback => {
+          callback(data.orderId, 'segment_secret_received', {}, data.segmentId)
+        })
+        break
+
+      case 'completion_step':
+        console.log('🎉 Completion step:', data.orderId, 'Details:', data.details)
+        this.completionStepCallbacks.forEach(callback => {
+          callback(data.orderId, data.details)
+        })
+        break
+
       case 'error':
         console.error('❌ Auction server error:', data.message)
         break
@@ -478,6 +500,10 @@ class DutchAuctionClient implements AuctionClient {
 
   onOrderCompleted(callback: (orderId: string, segmentId?: number) => void): void {
     this.orderCompletedCallbacks.push(callback)
+  }
+
+  onCompletionStep(callback: (orderId: string, details: any) => void): void {
+    this.completionStepCallbacks.push(callback)
   }
 }
 

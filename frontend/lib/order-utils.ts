@@ -1,6 +1,24 @@
 import { ethers } from 'ethers';
 import { HashLock, PartialFillOrderManager } from './hash-lock';
 import { chainsConfig } from '@/constants/chains';
+import {
+  rpc,
+  TransactionBuilder,
+  Networks,
+  Operation,
+  Address,
+  nativeToScVal,
+  xdr,
+  Transaction
+} from "@stellar/stellar-sdk";
+
+// Import Freighter API functions
+import {
+  signTransaction,
+  getAddress,
+  getNetwork,
+  isConnected
+} from "@stellar/freighter-api";
 
 // Order creation interface
 export interface OrderCreationParams {
@@ -95,11 +113,15 @@ export function createOrder(params: OrderCreationParams): OrderData {
 
   console.log(`⏰ Order creation time: ${new Date(orderCreationTime * 1000).toLocaleString()}`);
 
-  // Generate orderId using proper BigNumber format
+  // Generate orderId using proper format - use ETH address for encoding, or zero address if not available
+  const addressForEncoding = params.buyerEthAddress && ethers.utils.isAddress(params.buyerEthAddress) 
+    ? params.buyerEthAddress 
+    : '0x0000000000000000000000000000000000000000'
+  
   const orderId = ethers.utils.keccak256(
     ethers.utils.defaultAbiCoder.encode(
       ['string', 'address', 'string', 'uint256', 'string'],
-      [hashedSecret + Date.now().toString(), params.buyerAddress, 'CROSS_CHAIN_SWAP', ethers.utils.parseEther(params.sourceAmount), hashedSecret]
+      [hashedSecret + Date.now().toString(), addressForEncoding, 'CROSS_CHAIN_SWAP', ethers.utils.parseEther(params.sourceAmount), hashedSecret]
     )
   );
 
@@ -339,7 +361,7 @@ export async function prepareBuyer(
 
 /**
  * Prepare Stellar buyer by setting up trustlines and approvals
- * This should be called for Stellar-side operations
+ * This should be called ONLY when Stellar is the source chain (buyer is spending Stellar tokens)
  */
 export async function prepareStellarBuyer(
   sourceToken: string,
@@ -347,26 +369,164 @@ export async function prepareStellarBuyer(
   stellarWallet: any
 ): Promise<void> {
   console.log('🔐 Preparing Stellar buyer approval...');
+  console.log('📋 Token:', sourceToken);
+  console.log('💰 Source Amount:', sourceAmount);
+  console.log('👛 Wallet:', stellarWallet?.publicKey);
   
   try {
-    // For Stellar, we need to ensure the account has trustlines for the token
-    // For native XLM, no trustline is needed
+    // Validate wallet connection
+    if (!stellarWallet || !stellarWallet.publicKey) {
+      throw new Error('Freighter wallet not connected. Please connect your Stellar wallet.');
+    }
+
+    // Get Stellar chain configuration
+    const stellarConfig = chainsConfig['stellar-testnet'];
+    if (!stellarConfig) {
+      throw new Error('Stellar testnet configuration not found');
+    }
+
+    // For Stellar, we need to approve both the token contract AND the factory contract
+    // For native XLM, we call the approve function on both contracts
     if (sourceToken.toLowerCase() === 'xlm') {
-      console.log('✅ Native XLM - no trustline required');
-      return;
+      console.log('💎 Processing native XLM approvals...');
+      
+      // Convert source amount to stroops (1 XLM = 10,000,000 stroops)
+      // Approve 2x the source amount to ensure sufficient allowance
+      const amountInStroops = Math.floor(parseFloat(sourceAmount) * 10_000_000 * 2);
+      console.log(`💰 Approval amount: ${sourceAmount} XLM * 2 = ${amountInStroops} stroops`);
+      
+      // Initialize server
+      const server = new rpc.Server("https://soroban-testnet.stellar.org");
+      
+      // Get XLM token contract address from configuration
+      const xlmTokenAddress = stellarConfig.tokens.XLM.address;
+      const factoryAddress = stellarConfig.factoryAddress;
+      
+      console.log('🔑 Using connected Freighter wallet for approvals');
+      console.log('📋 XLM Token Contract:', xlmTokenAddress);
+      console.log('📋 Factory Contract:', factoryAddress);
+      console.log('📋 Buyer Address:', stellarWallet.publicKey);
+      
+      // Get account details
+      const account = await server.getAccount(stellarWallet.publicKey);
+      
+      // Step 1: Approve the XLM token contract
+      console.log('📝 Step 1: Approving XLM token contract...');
+      console.log('   Contract:', xlmTokenAddress);
+      console.log('   From (buyer):', stellarWallet.publicKey);
+      console.log('   Spender (factory):', factoryAddress);
+      console.log('   Amount (stroops):', amountInStroops);
+      
+      // Based on the CLI command: approve --from ${buyer} --spender ${factory} --amount ${amount} --expiration_ledger 1000000
+      // The SDK equivalent should be: [from, spender, amount, expiration_ledger]
+      const tokenApprovalTx = new TransactionBuilder(account, {
+        fee: "100000",
+        networkPassphrase: Networks.TESTNET,
+      })
+        .addOperation(Operation.invokeContractFunction({
+          contract: xlmTokenAddress,
+          function: "approve",
+          args: [
+            new Address(stellarWallet.publicKey).toScVal(), // from (buyer)
+            new Address(factoryAddress).toScVal(), // spender (factory)
+            nativeToScVal(amountInStroops, { type: "i128" }), // amount
+            nativeToScVal(1000000, { type: "u32" }) // expiration_ledger
+          ],
+        }))
+        .setTimeout(30)
+        .build();
+
+      // Prepare and sign token approval transaction
+      const preparedTokenTx = await server.prepareTransaction(tokenApprovalTx);
+      
+      console.log('📝 Requesting signature for token approval from Freighter...');
+      const tokenSignResult = await signTransaction(preparedTokenTx.toXDR(), {
+        networkPassphrase: Networks.TESTNET,
+        address: stellarWallet.publicKey
+      });
+      
+      if (tokenSignResult.error) {
+        throw new Error(`Failed to sign token approval transaction: ${tokenSignResult.error}`);
+      }
+      
+      // Send token approval transaction
+      const signedTokenTx = xdr.TransactionEnvelope.fromXDR(tokenSignResult.signedTxXdr, 'base64');
+      const signedTokenTransaction = new Transaction(signedTokenTx, Networks.TESTNET);
+      
+      console.log('📝 Sending token approval transaction...');
+      const tokenResponse = await server.sendTransaction(signedTokenTransaction);
+      
+      console.log('✅ XLM token contract approval successful!');
+      console.log('📋 Token Approval Hash:', tokenResponse.hash);
+      
+      // Step 2: Approve the factory contract (if needed for additional operations)
+      console.log('📝 Step 2: Approving factory contract...');
+      console.log('   Contract:', factoryAddress);
+      console.log('   Caller (buyer):', stellarWallet.publicKey);
+      console.log('   Amount (stroops):', amountInStroops);
+      
+      // Get fresh account sequence for second transaction
+      const accountForFactory = await server.getAccount(stellarWallet.publicKey);
+      
+      // Based on the CLI command: approve --caller ${buyer} --amount ${amount}
+      // The SDK equivalent should be: [caller, amount]
+      const factoryApprovalTx = new TransactionBuilder(accountForFactory, {
+        fee: "100000",
+        networkPassphrase: Networks.TESTNET,
+      })
+        .addOperation(Operation.invokeContractFunction({
+          contract: factoryAddress,
+          function: "approve",
+          args: [
+            new Address(stellarWallet.publicKey).toScVal(), // caller (buyer)
+            nativeToScVal(amountInStroops, { type: "i128" }) // amount
+          ],
+        }))
+        .setTimeout(30)
+        .build();
+
+      // Prepare and sign factory approval transaction
+      const preparedFactoryTx = await server.prepareTransaction(factoryApprovalTx);
+      
+      console.log('📝 Requesting signature for factory approval from Freighter...');
+      const factorySignResult = await signTransaction(preparedFactoryTx.toXDR(), {
+        networkPassphrase: Networks.TESTNET,
+        address: stellarWallet.publicKey
+      });
+      
+      if (factorySignResult.error) {
+        throw new Error(`Failed to sign factory approval transaction: ${factorySignResult.error}`);
+      }
+      
+      // Send factory approval transaction
+      const signedFactoryTx = xdr.TransactionEnvelope.fromXDR(factorySignResult.signedTxXdr, 'base64');
+      const signedFactoryTransaction = new Transaction(signedFactoryTx, Networks.TESTNET);
+      
+      console.log('📝 Sending factory approval transaction...');
+      const factoryResponse = await server.sendTransaction(signedFactoryTransaction);
+      
+      console.log('✅ Factory contract approval successful!');
+      console.log('📋 Factory Approval Hash:', factoryResponse.hash);
+      console.log('📋 Total Approved Amount:', amountInStroops, 'stroops (', amountInStroops / 10000000, 'XLM)');
+      console.log('📋 Approved by:', stellarWallet.publicKey);
+      console.log('📋 Token contract:', xlmTokenAddress);
+      console.log('📋 Factory contract:', factoryAddress);
+      
+    } else {
+      // For other Stellar tokens, we would need to set up trustlines
+      console.log('🪙 Processing custom Stellar token:', sourceToken);
+      console.log('📝 Setting up Stellar trustline for token:', sourceToken);
+      console.log('💰 Amount:', sourceAmount);
+      
+      // In a real implementation, you would:
+      // 1. Check if trustline exists for the custom token
+      // 2. Create trustline if it doesn't exist  
+      // 3. Then approve the factory contract to spend the tokens
+      
+      throw new Error(`Custom Stellar tokens not yet implemented. Only native XLM is supported.`);
     }
     
-    // For other Stellar tokens, we would need to set up trustlines
-    // This is a simplified implementation
-    console.log('📝 Setting up Stellar trustline for token:', sourceToken);
-    console.log('💰 Amount:', sourceAmount);
-    
-    // In a real implementation, you would:
-    // 1. Check if trustline exists
-    // 2. Create trustline if it doesn't exist
-    // 3. Handle any other Stellar-specific approvals
-    
-    console.log('✅ Stellar preparation completed successfully!');
+    console.log('🎉 Stellar buyer preparation completed successfully!');
     
   } catch (error) {
     console.error('❌ Error during Stellar preparation:', error);
@@ -402,10 +562,11 @@ export async function sendOrderToRelayer(orderData: OrderData, isPartialFill: bo
   };
 
   // For partial fill orders, also include the segment secrets
-  if (isPartialFill && orderData.partialFillSecrets && orderData.partialFillSecretHashes) {
+  if (isPartialFill && orderData.partialFillSecrets && orderData.partialFillSecretHashes && orderData.partialFillManager) {
     const segmentSecrets = orderData.partialFillSecrets.map((secret, index) => ({
       segmentId: index + 1,
-      hashedSecret: orderData.partialFillSecretHashes![index]
+      hashedSecret: orderData.partialFillSecretHashes![index],
+      merkleProof: orderData.partialFillManager!.getProof(index) // Include merkle proof for each segment
     }));
     
     requestBody.segmentSecrets = segmentSecrets;
@@ -581,10 +742,12 @@ export async function shareSegmentSecret(orderId: string, segmentId: number, ord
   const secretIndex = segmentId - 1;
   const secret = orderData.partialFillSecrets[secretIndex];
   const hashedSecret = orderData.partialFillSecretHashes![secretIndex];
+  const merkleProof = orderData.partialFillManager!.getProof(secretIndex); // Get merkle proof for this segment
   
   console.log(`🔐 Sharing secret for segment ${segmentId}:`);
   console.log(`   Secret: ${secret.slice(0, 10)}...`);
   console.log(`   Hash: ${hashedSecret.slice(0, 10)}...`);
+  console.log(`   Proof elements: ${merkleProof.length}`);
   
   try {
     const response = await fetch(`http://localhost:8000/orders/${orderId}/segment-secret`, {
@@ -595,7 +758,8 @@ export async function shareSegmentSecret(orderId: string, segmentId: number, ord
       body: JSON.stringify({ 
         segmentId: segmentId,
         secret: secret,
-        hashedSecret: hashedSecret
+        hashedSecret: hashedSecret,
+        merkleProof: merkleProof // Include merkle proof
       }),
     });
 
