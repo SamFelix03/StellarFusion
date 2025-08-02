@@ -304,7 +304,39 @@ public static hashSecret(secret: string): string {
 
 #### Relayer Integration
 
-The frontend sends order data to the relayer through the `sendOrderToRelayer()` function consisting of the following information:
+The frontend sends order data to the relayer through the `sendOrderToRelayer()` function:
+
+```typescript
+// From order-utils.ts lines 370-450
+export async function sendOrderToRelayer(orderData: OrderData, isPartialFill: boolean = false): Promise<any> {
+  const endpoint = isPartialFill ? 'http://localhost:8000/partialfill' : 'http://localhost:8000/create';
+  
+  // Prepare request body (including hashedSecret for resolver)
+  const requestBody: any = {
+    orderId: orderData.orderId,
+    buyerAddress: orderData.buyerAddress,
+    srcChainId: orderData.srcChainId,
+    dstChainId: orderData.dstChainId,
+    srcToken: orderData.srcToken,
+    dstToken: orderData.dstToken,
+    srcAmount: orderData.srcAmount,
+    dstAmount: orderData.dstAmount,
+    market_price: orderData.market_price,
+    slippage: orderData.slippage,
+    hashedSecret: orderData.hashedSecret // Include hashedSecret for resolver
+  };
+
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(requestBody),
+  });
+
+  return await response.json();
+}
+```
 
 #### Data Sent to Relayer
 
@@ -338,3 +370,289 @@ StellarFusion includes a comprehensive price service (`src/price-service.ts`) th
 5. **Relayer Transmission**: Order data is sent to the relayer for processing the Dutch Auction
 
 
+### Partial Fills
+
+Partial Fills represent an advanced feature of StellarFusion that enables large orders to be executed through multiple smaller transactions. This section details the comprehensive flow from user interface configuration to smart contract execution and relayer integration for partial fill orders.
+
+#### User Interface Flow
+
+The partial fill configuration process begins in the frontend interface with the `PartialFillSettings` component:
+
+1. **Partial Fill Toggle**: Users can enable/disable partial fills using a custom switch component
+2. **Order Creation**: The `handleCreateOrder()` function includes partial fill parameters
+
+#### Order Data Generation
+
+The `createOrder()` function in `frontend/lib/order-utils.ts` generates partial fill orders with Merkle tree implementation:
+
+```typescript
+// From order-utils.ts lines 43-100
+export function createOrder(params: OrderCreationParams): OrderData {
+  let secret: string;
+  let hashedSecret: string;
+  let partialFillManager: PartialFillOrderManager | undefined;
+  let partialFillSecrets: string[] | undefined;
+  let partialFillSecretHashes: string[] | undefined;
+
+  if (params.enablePartialFills && params.partsCount && params.partsCount > 1) {
+    console.log(`🌳 Creating partial fill order with ${params.partsCount} parts`);
+    
+    // Create partial fill manager with merkle tree
+    partialFillManager = new PartialFillOrderManager(params.partsCount);
+    hashedSecret = partialFillManager.getHashLock();
+    // Use first secret as the main order secret (for backwards compatibility)
+    secret = partialFillManager.getSecret(0);
+    
+    // Store all secrets and hashes for UI display
+    partialFillSecrets = partialFillManager.getAllSecrets();
+    partialFillSecretHashes = partialFillManager.getAllSecretHashes();
+    
+    console.log(`📋 Generated ${params.partsCount + 1} secrets for partial fill (including extra)`);
+    console.log(`🔐 HashLock (Merkle Root): ${hashedSecret}`);
+    console.log(`🔑 Main secret (first secret): ${secret.slice(0, 10)}...`);
+  } else {
+    // Single fill logic (same as Fusion+ Swaps)
+    const secretBytes = ethers.utils.randomBytes(32);
+    secret = ethers.utils.hexlify(secretBytes);
+    hashedSecret = ethers.utils.sha256(secretBytes);
+  }
+  
+  return {
+    orderId,
+    buyerAddress: params.buyerAddress,
+    srcChainId: chainsConfig[params.sourceChain].chainId,
+    dstChainId: chainsConfig[params.destinationChain].chainId,
+    srcToken: params.sourceToken,
+    dstToken: params.destinationToken,
+    srcAmount: params.sourceAmount,
+    dstAmount: params.destinationAmount,
+    hashedSecret,
+    secret,
+    isPartialFillEnabled: params.enablePartialFills,
+    partialFillManager,
+    partialFillSecrets,
+    partialFillSecretHashes
+  };
+}
+```
+
+#### Smart Contract Integration
+
+##### Ethereum Side (EscrowFactory.sol)
+
+The Ethereum smart contract handles partial fill order creation through the `createSrcEscrow()` function:
+
+```solidity
+// From EscrowFactory.sol lines 103-170
+function createSrcEscrow(
+    bytes32 hashedSecret,
+    address recipient,
+    address buyer,
+    uint256 tokenAmount,
+    uint256 withdrawalStart,
+    uint256 publicWithdrawalStart,
+    uint256 cancellationStart,
+    uint256 publicCancellationStart,
+    uint256 partIndex,      // >0 for partial fill
+    uint16 totalParts       // >1 for partial fill
+) external payable nonReentrant {
+    require(msg.value == DEPOSIT_AMOUNT, "Incorrect ETH deposit");
+    require(tokenAmount > 0, "Token amount must be > 0");
+    require(recipient != address(0), "Invalid recipient");
+    require(buyer != address(0), "Invalid buyer");
+    
+    // Validate time window progression
+    require(
+        publicWithdrawalStart > withdrawalStart &&
+        cancellationStart > publicWithdrawalStart &&
+        publicCancellationStart > cancellationStart,
+        "Invalid time windows"
+    );
+
+    // Check if this is a partial fill or complete fill
+    bool isPartialFill = totalParts > 1;
+    if (isPartialFill) {
+        require(partIndex < totalParts, "Invalid part index");
+        require(!partialFillsUsed[hashedSecret][partIndex], "Part already used");
+        
+        // Mark this part as used and update tracking
+        partialFillsUsed[hashedSecret][partIndex] = true;
+        partialFillsCount[hashedSecret]++;
+    }
+
+    // Create SourceEscrow contract with partial fill support
+    SourceEscrow escrow = new SourceEscrow{value: msg.value}(
+        buyer,  // Creator
+        recipient,
+        hashedSecret,
+        WETH,
+        tokenAmount,
+        withdrawalStart,
+        publicWithdrawalStart,
+        cancellationStart,
+        publicCancellationStart,
+        partIndex,
+        totalParts
+    );
+
+    address escrowAddress = address(escrow);
+    userEscrows[buyer].push(escrowAddress);
+    isEscrowContract[escrowAddress] = true;
+
+    // Transfer tokens from buyer to escrow
+    IERC20(WETH).transferFrom(buyer, escrowAddress, tokenAmount);
+
+    emit SrcEscrowCreated(
+        buyer,
+        recipient,
+        escrowAddress,
+        hashedSecret,
+        tokenAmount,
+        withdrawalStart,
+        publicWithdrawalStart,
+        cancellationStart,
+        publicCancellationStart
+    );
+}
+```
+
+##### Stellar Side (LimitOrderProtocol.sol)
+
+The Stellar smart contract handles partial fill order creation through the `fill_order()` function:
+
+```rust
+// From limit-order-protocol/src/lib.rs lines 100-180
+pub fn fill_order(
+    env: Env,
+    order_hash: BytesN<32>,
+    maker: Address,
+    recipient: Address,
+    token_amount: i128,
+    hashed_secret: BytesN<32>,
+    withdrawal_start: u64,
+    public_withdrawal_start: u64,
+    part_index: u64,
+    total_parts: u32,
+) -> Address {
+    // Validate inputs
+    if total_parts == 0 {
+        panic!("Total parts must be > 0");
+    }
+    if part_index >= total_parts as u64 {
+        panic!("Invalid part index");
+    }
+    if token_amount <= 0 {
+        panic!("Token amount must be > 0");
+    }
+
+    // Check if this part is already filled
+    let part_filled: bool = env.storage()
+        .persistent()
+        .get(&DataKey::PartsFilled(order_hash.clone(), part_index))
+        .unwrap_or(false);
+    if part_filled {
+        panic!("Part already filled");
+    }
+
+    // Check allowance - LOP must be approved to spend maker's tokens
+    let current_allowance = Self::allowance(env.clone(), maker.clone(), env.current_contract_address());
+    if current_allowance < token_amount {
+        panic!("Insufficient allowance");
+    }
+    
+    // Reduce allowance
+    let new_allowance = current_allowance - token_amount;
+    env.storage().persistent().set(
+        &DataKey::TokenAllowance(maker.clone(), env.current_contract_address()),
+        &new_allowance
+    );
+
+    // Get factory address and create escrow
+    let factory_address: Address = env.storage().instance().get(&DataKey::EscrowFactory).unwrap();
+    let factory_client = EscrowFactoryTraitClient::new(&env, &factory_address);
+    
+    // Create escrow using factory client with partial fill support
+    let escrow_address = factory_client.create_src_escrow_partial(
+        &env.current_contract_address(), // creator (LOP)
+        &hashed_secret,
+        &recipient,
+        &maker,        // buyer
+        &token_amount,
+        &withdrawal_start,
+        &public_withdrawal_start,
+        &(withdrawal_start + 86400), // cancellation_start (24 hours after withdrawal)
+        &part_index,
+        &total_parts,
+    );
+
+    // Track the filled order part
+    let filled_order = FilledOrder {
+        order_hash: order_hash.clone(),
+        maker: maker.clone(),
+        recipient: recipient.clone(),
+        escrow_address: escrow_address.clone(),
+        part_index,
+        total_parts,
+        is_active: true,
+    };
+
+    // Store order data
+    let mut filled_orders: Vec<FilledOrder> = env.storage()
+        .persistent()
+        .get(&DataKey::FilledOrders(order_hash.clone()))
+        .unwrap_or(Vec::new(&env));
+    filled_orders.push_back(filled_order);
+    env.storage().persistent().set(&DataKey::FilledOrders(order_hash.clone()), &filled_orders);
+
+    // Mark part as filled
+    env.storage().persistent().set(&DataKey::PartsFilled(order_hash.clone(), part_index), &true);
+
+    escrow_address
+}
+```
+#### Relayer Integration
+
+The frontend sends partial fill order data to the relayer through the `sendOrderToRelayer()` function:
+
+#### Data Sent to Relayer
+
+The following data structure is transmitted to the relayer for partial fills:
+
+```json
+{
+  "orderId": "0x...",           // Unique order identifier
+  "buyerAddress": "0x...",      // Buyer's wallet address
+  "srcChainId": 11155111,       // Source chain ID (Sepolia)
+  "dstChainId": "stellar-testnet", // Destination chain ID
+  "srcToken": "ETH",            // Source token symbol
+  "dstToken": "XLM",            // Destination token symbol
+  "srcAmount": "0.1",           // Source amount
+  "dstAmount": "100",           // Destination amount
+  "market_price": "1000",       // Current market price
+  "slippage": "0.5",            // Slippage tolerance
+  "hashedSecret": "0x...",      // Cryptographic hash for escrow creation
+  "segmentSecrets": [           // Partial fill segment data
+    {
+      "segmentId": 1,
+      "hashedSecret": "0x..."
+    },
+    {
+      "segmentId": 2,
+      "hashedSecret": "0x..."
+    }
+  ]
+}
+```
+
+#### Partial Fill Execution Flow
+
+1. **Frontend Configuration**: User enables partial fills
+2. **Merkle Tree Generation**: System creates Merkle tree with individual secrets for each part
+3. **Segment Creation**: Order is divided into segments with individual cryptographic proofs
+
+**Key Advantages:**
+- **Improved Liquidity**: Large orders can be filled by multiple resolvers
+- **Risk Mitigation**: Partial execution reduces exposure to market volatility
+- **Flexible Execution**: Resolvers can choose which parts to fill based on availability
+- **Atomic Security**: Each part maintains atomic execution guarantees
+- **Real-time Progress**: Users can track completion status of individual segments
