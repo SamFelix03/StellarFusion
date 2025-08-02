@@ -393,14 +393,21 @@ export class ResolverContractManager {
     }
   }
 
-  // Create Source Escrow (Stellar) - Using Soroban CLI (matches dynamic-swap.ts)
+  // Create Source Escrow (Stellar) - Using Next.js API route with connected wallet
   async createSourceEscrowStellar(
     chainId: string,
-    params: SourceEscrowParams
+    params: SourceEscrowParams,
+    stellarWallet?: any
   ): Promise<ExecutionResult> {
     try {
-      console.log('🌟 Creating Stellar source escrow via Soroban CLI...')
+      console.log('🌟 Creating Stellar source escrow via API...')
       console.log('📋 Parameters:', params)
+      console.log('👛 Stellar Wallet:', stellarWallet)
+      
+      // Validate wallet connection
+      if (!stellarWallet || !stellarWallet.publicKey) {
+        throw new Error('Freighter wallet not connected. Please connect your Stellar wallet.')
+      }
       
       const config = CHAIN_CONFIGS[chainId as keyof typeof CHAIN_CONFIGS]
       if (!config || !config.lopAddress) {
@@ -414,12 +421,12 @@ export class ResolverContractManager {
       // Determine function name and parameters based on partial fill
       const actualPartIndex = params.segmentIndex || 0
       const actualTotalParts = params.totalParts || 1
-      const functionName = (actualPartIndex > 0 || actualTotalParts > 1) ? 'create_src_escrow_partial' : 'create_src_escrow'
+      const action = (actualPartIndex > 0 || actualTotalParts > 1) ? 'create_src_escrow_partial' : 'create_src_escrow'
       
       console.log("🔍 Debug - Parameters being passed:")
-      console.log(`  creator: ${params.resolverAddress}`)
+      console.log(`  creator: ${stellarWallet.publicKey}`)
       console.log(`  hashed_secret: ${params.hashedSecret}`)
-      console.log(`  recipient: ${params.resolverAddress}`)
+      console.log(`  recipient: ${stellarWallet.publicKey}`)
       console.log(`  buyer: ${params.buyerAddress}`)
       console.log(`  token_amount: ${amountInStroops} (${params.srcAmount} XLM)`)
       console.log(`  withdrawal_start: ${timeWindows.withdrawalStart}`)
@@ -429,39 +436,62 @@ export class ResolverContractManager {
       console.log(`  part_index: ${actualPartIndex}`)
       console.log(`  total_parts: ${actualTotalParts}`)
       
-      // Use CLI approach for better compatibility (matches dynamic-swap.ts)
-      const { execSync } = require('child_process')
-      
-      let command: string
-      if (functionName === 'create_src_escrow_partial') {
-        // Partial fill function with all parameters (note: no public_cancellation_start as we reduced params)
-        command = `soroban contract invoke --id ${config.lopAddress} --source stellar-resolver --network testnet -- ${functionName} --creator ${params.resolverAddress} --hashed_secret ${params.hashedSecret.slice(2)} --recipient ${params.resolverAddress} --buyer ${params.buyerAddress} --token_amount ${amountInStroops} --withdrawal_start ${timeWindows.withdrawalStart} --public_withdrawal_start ${timeWindows.publicWithdrawalStart} --cancellation_start ${timeWindows.cancellationStart} --part_index ${actualPartIndex} --total_parts ${actualTotalParts}`
-      } else {
-        // Regular function without partial fill parameters
-        command = `soroban contract invoke --id ${config.lopAddress} --source stellar-resolver --network testnet -- ${functionName} --creator ${params.resolverAddress} --hashed_secret ${params.hashedSecret.slice(2)} --recipient ${params.resolverAddress} --buyer ${params.buyerAddress} --token_amount ${amountInStroops} --withdrawal_start ${timeWindows.withdrawalStart} --public_withdrawal_start ${timeWindows.publicWithdrawalStart} --cancellation_start ${timeWindows.cancellationStart} --public_cancellation_start ${timeWindows.publicCancellationStart}`
+      // Call Next.js API route with wallet information
+      const apiParams = {
+        contractAddress: config.lopAddress,
+        creator: stellarWallet.publicKey,
+        hashedSecret: params.hashedSecret.slice(2),
+        recipient: stellarWallet.publicKey,
+        buyer: params.buyerAddress,
+        tokenAmount: amountInStroops,
+        withdrawalStart: timeWindows.withdrawalStart,
+        publicWithdrawalStart: timeWindows.publicWithdrawalStart,
+        cancellationStart: timeWindows.cancellationStart,
+        publicCancellationStart: timeWindows.publicCancellationStart,
+        partIndex: actualPartIndex,
+        totalParts: actualTotalParts
       }
       
-      console.log('📤 Executing CLI command...')
-      console.log(`Command: ${command}`)
+      const response = await fetch('/api/stellar', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          action,
+          params: apiParams,
+          walletInfo: {
+            publicKey: stellarWallet.publicKey,
+            isConnected: stellarWallet.isConnected,
+            network: stellarWallet.network
+          }
+        })
+      })
       
-      const result = execSync(command, { encoding: 'utf8' })
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(`API call failed: ${errorData.error}`)
+      }
+      
+      const result = await response.json()
       
       console.log('✅ Stellar source escrow created successfully!')
-      console.log(`📋 Result: ${result.trim()}`)
+      console.log(`📋 Result: ${result.result}`)
       
       return {
         success: true,
-        escrowAddress: result.trim().replace(/"/g, ''),
-        transactionHash: 'CLI_SUCCESS',
+        escrowAddress: result.details.escrowAddress,
+        transactionHash: result.details.transactionHash,
         message: 'Source escrow created successfully',
         details: {
           orderId: params.orderId,
           buyerAddress: params.buyerAddress,
-          resolverAddress: params.resolverAddress,
+          resolverAddress: stellarWallet.publicKey,
           amount: params.srcAmount,
           hashedSecret: params.hashedSecret,
-          functionUsed: functionName,
-          timeWindows
+          functionUsed: action,
+          timeWindows,
+          walletAddress: result.details.walletAddress
         }
       }
       
@@ -582,18 +612,24 @@ export class ResolverContractManager {
     }
   }
 
-  // Create Destination Escrow (Stellar) - Using Soroban CLI (matches dynamic-swap.ts)
+  // Create Destination Escrow (Stellar) - Using Next.js API route with connected wallet
   async createDestinationEscrowStellar(
     chainId: string,
     hashedSecret: string,
     buyerAddress: string,
     dstAmount: string,
+    stellarWallet?: any,
     isPartialFill: boolean = false,
     segmentIndex?: number,
     totalParts?: number
   ): Promise<ExecutionResult> {
     try {
-      console.log('🌟 Creating Stellar destination escrow via Soroban CLI...')
+      console.log('🌟 Creating Stellar destination escrow via API...')
+      
+      // Validate wallet connection
+      if (!stellarWallet || !stellarWallet.publicKey) {
+        throw new Error('Freighter wallet not connected. Please connect your Stellar wallet.')
+      }
       
       const config = CHAIN_CONFIGS[chainId as keyof typeof CHAIN_CONFIGS]
       if (!config || !config.factoryAddress) {
@@ -607,10 +643,10 @@ export class ResolverContractManager {
       // Determine function name based on partial fill
       const actualPartIndex = segmentIndex || 0
       const actualTotalParts = totalParts || 1
-      const functionName = (actualPartIndex > 0 || actualTotalParts > 1) ? 'create_dst_escrow_partial' : 'create_dst_escrow'
+      const action = (actualPartIndex > 0 || actualTotalParts > 1) ? 'create_dst_escrow_partial' : 'create_dst_escrow'
       
       console.log("🔍 Debug - Parameters being passed:")
-      console.log(`  creator: stellar-resolver`)
+      console.log(`  creator: ${stellarWallet.publicKey}`)
       console.log(`  hashed_secret: ${hashedSecret}`)
       console.log(`  recipient: ${buyerAddress}`)
       console.log(`  token_amount: ${amountInStroops} (${dstAmount} XLM)`)
@@ -620,35 +656,57 @@ export class ResolverContractManager {
       console.log(`  part_index: ${actualPartIndex}`)
       console.log(`  total_parts: ${actualTotalParts}`)
       
-      // Use CLI approach for better compatibility (matches dynamic-swap.ts)
-      const { execSync } = require('child_process')
-      
-      let command: string
-      if (functionName === 'create_dst_escrow_partial') {
-        command = `soroban contract invoke --id ${config.factoryAddress} --source stellar-resolver --network testnet -- ${functionName} --creator stellar-resolver --hashed_secret ${hashedSecret.slice(2)} --recipient ${buyerAddress} --token_amount ${amountInStroops} --withdrawal_start ${timeWindows.withdrawalStart} --public_withdrawal_start ${timeWindows.publicWithdrawalStart} --cancellation_start ${timeWindows.cancellationStart} --part_index ${actualPartIndex} --total_parts ${actualTotalParts}`
-      } else {
-        command = `soroban contract invoke --id ${config.factoryAddress} --source stellar-resolver --network testnet -- ${functionName} --creator stellar-resolver --hashed_secret ${hashedSecret.slice(2)} --recipient ${buyerAddress} --token_amount ${amountInStroops} --withdrawal_start ${timeWindows.withdrawalStart} --public_withdrawal_start ${timeWindows.publicWithdrawalStart} --cancellation_start ${timeWindows.cancellationStart}`
+      // Call Next.js API route with wallet information
+      const apiParams = {
+        contractAddress: config.factoryAddress,
+        hashedSecret: hashedSecret.slice(2),
+        recipient: buyerAddress,
+        tokenAmount: amountInStroops,
+        withdrawalStart: timeWindows.withdrawalStart,
+        publicWithdrawalStart: timeWindows.publicWithdrawalStart,
+        cancellationStart: timeWindows.cancellationStart,
+        partIndex: actualPartIndex,
+        totalParts: actualTotalParts
       }
       
-      console.log('📤 Executing CLI command...')
-      console.log(`Command: ${command}`)
+      const response = await fetch('/api/stellar', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          action,
+          params: apiParams,
+          walletInfo: {
+            publicKey: stellarWallet.publicKey,
+            isConnected: stellarWallet.isConnected,
+            network: stellarWallet.network
+          }
+        })
+      })
       
-      const result = execSync(command, { encoding: 'utf8' })
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(`API call failed: ${errorData.error}`)
+      }
+      
+      const result = await response.json()
       
       console.log('✅ Stellar destination escrow created successfully!')
-      console.log(`📋 Result: ${result.trim()}`)
+      console.log(`📋 Result: ${result.result}`)
       
       return {
         success: true,
-        escrowAddress: result.trim().replace(/"/g, ''),
-        transactionHash: 'CLI_SUCCESS',
+        escrowAddress: result.details.escrowAddress,
+        transactionHash: result.details.transactionHash,
         message: 'Destination escrow created successfully',
         details: {
           buyerAddress,
           amount: dstAmount,
           hashedSecret,
-          functionUsed: functionName,
-          timeWindows
+          functionUsed: action,
+          timeWindows,
+          walletAddress: result.details.walletAddress
         }
       }
       
@@ -866,13 +924,20 @@ export class ResolverContractManager {
     }
   }
 
-  // Withdraw from Stellar escrow using secret and CLI (matches dynamic-swap.ts)
+  // Withdraw from Stellar escrow using secret and API with connected wallet
   async withdrawFromStellarEscrow(
-    params: WithdrawalParams
+    params: WithdrawalParams,
+    stellarWallet?: any
   ): Promise<ExecutionResult> {
     try {
-      console.log('🌟 Withdrawing from Stellar escrow via Soroban CLI...')
+      console.log('🌟 Withdrawing from Stellar escrow via API...')
       console.log('📋 Parameters:', params)
+      console.log('👛 Stellar Wallet:', stellarWallet)
+      
+      // Validate wallet connection
+      if (!stellarWallet || !stellarWallet.publicKey) {
+        throw new Error('Freighter wallet not connected. Please connect your Stellar wallet.')
+      }
       
       const config = CHAIN_CONFIGS[params.chainId as keyof typeof CHAIN_CONFIGS]
       if (!config || !config.factoryAddress) {
@@ -881,15 +946,15 @@ export class ResolverContractManager {
       
       // Determine method name based on escrow type and partial fill
       const isSource = params.isSource
-      let methodName = isSource ? 'withdraw_src_escrow' : 'withdraw_dst_escrow'
+      let action = isSource ? 'withdraw_src_escrow' : 'withdraw_dst_escrow'
       
       // If partial fill, use the proof-based method
       if (params.isPartialFill && params.merkleProof && params.merkleProof.length > 0) {
-        methodName = isSource ? 'withdraw_src_escrow_with_proof' : 'withdraw_dst_escrow_with_proof'
+        action = isSource ? 'withdraw_src_escrow_with_proof' : 'withdraw_dst_escrow_with_proof'
       }
       
       console.log("🔍 Debug - Parameters being passed:")
-      console.log(`  caller: stellar-resolver`)
+      console.log(`  caller: ${stellarWallet.publicKey}`)
       console.log(`  escrow_address: ${params.escrowAddress}`)
       console.log(`  secret: ${params.secret}`)
       console.log(`  is_source: ${isSource}`)
@@ -898,41 +963,61 @@ export class ResolverContractManager {
         console.log(`  merkle_proof_length: ${params.merkleProof.length}`)
       }
       
-      // Use CLI approach for better compatibility (matches dynamic-swap.ts)
-      const { execSync } = require('child_process')
+      // Call Next.js API route with wallet information
+      const apiParams: any = {
+        contractAddress: config.factoryAddress,
+        escrowAddress: params.escrowAddress,
+        secret: params.secret.slice(2)
+      }
       
-      let command: string
+      // Add merkle proof if partial fill
       if (params.isPartialFill && params.merkleProof && params.merkleProof.length > 0) {
-        // Convert merkle proof to CLI format - Soroban CLI expects JSON array format
-        // Format: --merkle_proof '[ "hex1", "hex2" ]' (with quotes around each element)
         const proofArray = params.merkleProof.map(p => `"${p.slice(2)}"`) // Remove 0x prefix and add quotes
         const proofStr = `[ ${proofArray.join(', ')} ]`
-        command = `soroban contract invoke --id ${config.factoryAddress} --source stellar-resolver --network testnet -- ${methodName} --caller stellar-resolver --escrow_address ${params.escrowAddress} --secret ${params.secret.slice(2)} --merkle_proof '${proofStr}'`
+        apiParams.merkleProof = proofStr
         console.log(`🔍 Partial fill withdrawal with merkle proof (${params.merkleProof.length} elements)`)
         console.log(`   Proof format: ${proofStr}`)
       } else {
-        command = `soroban contract invoke --id ${config.factoryAddress} --source stellar-resolver --network testnet -- ${methodName} --caller stellar-resolver --escrow_address ${params.escrowAddress} --secret ${params.secret.slice(2)}`
         console.log(`🔍 Single fill withdrawal (no merkle proof needed)`)
       }
       
-      console.log('📤 Executing withdrawal CLI command...')
-      console.log(`Command: ${command}`)
+      const response = await fetch('/api/stellar', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          action,
+          params: apiParams,
+          walletInfo: {
+            publicKey: stellarWallet.publicKey,
+            isConnected: stellarWallet.isConnected,
+            network: stellarWallet.network
+          }
+        })
+      })
       
-      const result = execSync(command, { encoding: 'utf8' })
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(`API call failed: ${errorData.error}`)
+      }
+      
+      const result = await response.json()
       
       console.log('✅ Stellar escrow withdrawal completed successfully!')
-      console.log(`📋 Result: ${result.trim()}`)
+      console.log(`📋 Result: ${result.result}`)
       
       return {
         success: true,
-        transactionHash: 'CLI_SUCCESS',
+        transactionHash: result.details.transactionHash,
         message: 'Withdrawal completed successfully',
         details: {
           escrowAddress: params.escrowAddress,
           isSource: params.isSource,
           isPartialFill: params.isPartialFill,
-          methodUsed: methodName,
-          segmentIndex: params.segmentIndex
+          methodUsed: action,
+          segmentIndex: params.segmentIndex,
+          walletAddress: result.details.walletAddress
         }
       }
       
@@ -949,14 +1034,15 @@ export class ResolverContractManager {
   async executeWithdrawalsWithSigners(
     sourceParams: WithdrawalParams,
     destinationParams: WithdrawalParams,
-    evmSigner?: ethers.Wallet | ethers.Signer
+    evmSigner?: ethers.Wallet | ethers.Signer,
+    stellarWallet?: any
   ): Promise<{ source: ExecutionResult; destination: ExecutionResult }> {
     console.log('🔐 Executing complete withdrawal workflow...')
     
     // Withdraw from source escrow (resolver gets source tokens)
     console.log('📤 Step 1: Withdrawing from source escrow (resolver receives tokens)...')
     const sourceResult = sourceParams.chainId === 'stellar-testnet' 
-      ? await this.withdrawFromStellarEscrow(sourceParams)
+      ? await this.withdrawFromStellarEscrow(sourceParams, stellarWallet)
       : await this.withdrawFromEVMEscrow(sourceParams, evmSigner!)
     
     if (!sourceResult.success) {
@@ -973,7 +1059,7 @@ export class ResolverContractManager {
     // Withdraw from destination escrow (buyer gets destination tokens)
     console.log('📤 Step 2: Withdrawing from destination escrow (buyer receives tokens)...')
     const destinationResult = destinationParams.chainId === 'stellar-testnet'
-      ? await this.withdrawFromStellarEscrow(destinationParams) 
+      ? await this.withdrawFromStellarEscrow(destinationParams, stellarWallet) 
       : await this.withdrawFromEVMEscrow(destinationParams, evmSigner!)
     
     return {
@@ -990,6 +1076,15 @@ export class ResolverContractManager {
     throw new Error('executeWithdrawals deprecated - use executeWithdrawalsWithSigners with proper signers')
   }
 
+  // Get the correct buyer address for a specific chain
+  getBuyerAddressForChain(orderData: any, chainId: string): string {
+    if (chainId === 'stellar-testnet') {
+      return orderData.buyerStellarAddress || orderData.buyerAddress
+    } else {
+      return orderData.buyerEthAddress || orderData.buyerAddress
+    }
+  }
+
   // Helper method to create destination escrow based on chain type
   async createDestinationEscrow(
     chainId: string,
@@ -997,6 +1092,7 @@ export class ResolverContractManager {
     buyerAddress: string,
     dstAmount: string,
     signer?: ethers.Wallet | ethers.Signer,
+    stellarWallet?: any,
     isPartialFill: boolean = false,
     segmentIndex?: number,
     totalParts?: number
@@ -1007,6 +1103,7 @@ export class ResolverContractManager {
         hashedSecret,
         buyerAddress,
         dstAmount,
+        stellarWallet,
         isPartialFill,
         segmentIndex,
         totalParts
@@ -1033,10 +1130,11 @@ export class ResolverContractManager {
   async createSourceEscrow(
     chainId: string,
     params: SourceEscrowParams,
-    signer?: ethers.Wallet | ethers.Signer
+    signer?: ethers.Wallet | ethers.Signer,
+    stellarWallet?: any
   ): Promise<ExecutionResult> {
     if (chainId === 'stellar-testnet') {
-      return await this.createSourceEscrowStellar(chainId, params)
+      return await this.createSourceEscrowStellar(chainId, params, stellarWallet)
     } else {
       if (!signer) {
         throw new Error(`Signer required for EVM source escrow on chain: ${chainId}`)
@@ -1069,7 +1167,7 @@ export class ResolverContractManager {
       }
       
       const sourceResult = orderExecution.sourceChain === 'stellar-testnet'
-        ? await this.createSourceEscrowStellar(orderExecution.sourceChain, sourceParams)
+        ? await this.createSourceEscrowStellar(orderExecution.sourceChain, sourceParams, orderExecution.stellarKeypair)
         : await this.createSourceEscrowEVM(orderExecution.sourceChain, sourceParams, orderExecution.evmSigner!)
       if (!sourceResult.success) {
         onProgressUpdate?.('source-escrow', 'failed', { error: sourceResult.error })
@@ -1091,6 +1189,7 @@ export class ResolverContractManager {
             orderExecution.hashedSecret,
             orderExecution.buyerAddress,
             orderExecution.destinationAmount,
+            orderExecution.stellarKeypair,
             orderExecution.isPartialFill,
             orderExecution.segmentIndex,
             orderExecution.totalParts
@@ -1194,7 +1293,8 @@ export class ResolverContractManager {
       const withdrawalResults = await this.executeWithdrawalsWithSigners(
         sourceWithdrawalParams,
         destinationWithdrawalParams,
-        orderExecution.evmSigner
+        orderExecution.evmSigner,
+        orderExecution.stellarKeypair
       )
       
       if (!withdrawalResults.source.success || !withdrawalResults.destination.success) {

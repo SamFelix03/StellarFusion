@@ -47,7 +47,10 @@ class DutchAuctionServer {
         orderId: auction.orderId,
         currentPrice: auction.currentPrice,
         startingPrice: auction.startingPrice,
-        timeRemaining: auction.endTime - Date.now()
+        timeRemaining: auction.endTime - Date.now(),
+        buyerAddress: auction.buyerAddress,
+        buyerEthAddress: auction.buyerEthAddress,
+        buyerStellarAddress: auction.buyerStellarAddress
       }));
       
       ws.send(JSON.stringify({
@@ -108,6 +111,8 @@ class DutchAuctionServer {
             // Include ALL database fields
             hashedSecret: auction.hashedSecret,
             buyerAddress: auction.buyerAddress,
+            buyerEthAddress: auction.buyerEthAddress,
+            buyerStellarAddress: auction.buyerStellarAddress,
             srcChainId: auction.srcChainId,
             dstChainId: auction.dstChainId,
             srcToken: auction.srcToken,
@@ -161,6 +166,9 @@ class DutchAuctionServer {
           ws.send(JSON.stringify({
             type: 'segmented_auction_update',
             orderId: orderId,
+            buyerAddress: auction.buyerAddress,
+            buyerEthAddress: auction.buyerEthAddress,
+            buyerStellarAddress: auction.buyerStellarAddress,
             segments: auction.segments,
             currentSegment: auction.currentSegment,
             currentSegmentData: currentSegment,
@@ -552,6 +560,8 @@ class DutchAuctionServer {
       // Include ALL database fields
       hashedSecret: auction.hashedSecret,
       buyerAddress: auction.buyerAddress,
+      buyerEthAddress: auction.buyerEthAddress,
+      buyerStellarAddress: auction.buyerStellarAddress,
       srcChainId: auction.srcChainId,
       dstChainId: auction.dstChainId,
       srcToken: auction.srcToken,
@@ -683,6 +693,8 @@ class DutchAuctionServer {
       // Include ALL database fields
       hashedSecret: auction.hashedSecret,
       buyerAddress: auction.buyerAddress,
+      buyerEthAddress: auction.buyerEthAddress,
+      buyerStellarAddress: auction.buyerStellarAddress,
       srcChainId: auction.srcChainId,
       dstChainId: auction.dstChainId,
       srcToken: auction.srcToken,
@@ -735,6 +747,8 @@ class DutchAuctionServer {
         // Include ALL database fields
         hashedSecret: auction.hashedSecret,
         buyerAddress: auction.buyerAddress,
+        buyerEthAddress: auction.buyerEthAddress,
+        buyerStellarAddress: auction.buyerStellarAddress,
         srcChainId: auction.srcChainId,
         dstChainId: auction.dstChainId,
         srcToken: auction.srcToken,
@@ -800,6 +814,8 @@ class DutchAuctionServer {
         // Include ALL database fields
         hashedSecret: auction.hashedSecret,
         buyerAddress: auction.buyerAddress,
+        buyerEthAddress: auction.buyerEthAddress,
+        buyerStellarAddress: auction.buyerStellarAddress,
         srcChainId: auction.srcChainId,
         dstChainId: auction.dstChainId,
         srcToken: auction.srcToken,
@@ -899,6 +915,8 @@ class DutchAuctionServer {
       // Include ALL database fields
       hashedSecret: auction.hashedSecret,
       buyerAddress: auction.buyerAddress,
+      buyerEthAddress: auction.buyerEthAddress,
+      buyerStellarAddress: auction.buyerStellarAddress,
       srcChainId: auction.srcChainId,
       dstChainId: auction.dstChainId,
       srcToken: auction.srcToken,
@@ -985,6 +1003,8 @@ class DutchAuctionServer {
       // Include ALL database fields
       hashedSecret: auction.hashedSecret,
       buyerAddress: auction.buyerAddress,
+      buyerEthAddress: auction.buyerEthAddress,
+      buyerStellarAddress: auction.buyerStellarAddress,
       srcChainId: auction.srcChainId,
       dstChainId: auction.dstChainId,
       srcToken: auction.srcToken,
@@ -1045,6 +1065,8 @@ class DutchAuctionServer {
       // Include ALL database fields
       hashedSecret: auction.hashedSecret,
       buyerAddress: auction.buyerAddress,
+      buyerEthAddress: auction.buyerEthAddress,
+      buyerStellarAddress: auction.buyerStellarAddress,
       srcChainId: auction.srcChainId,
       dstChainId: auction.dstChainId,
       srcToken: auction.srcToken,
@@ -1087,6 +1109,8 @@ class DutchAuctionServer {
         // Include ALL database fields
         hashedSecret: auction.hashedSecret,
         buyerAddress: auction.buyerAddress,
+        buyerEthAddress: auction.buyerEthAddress,
+        buyerStellarAddress: auction.buyerStellarAddress,
         srcChainId: auction.srcChainId,
         dstChainId: auction.dstChainId,
         srcToken: auction.srcToken,
@@ -1200,6 +1224,8 @@ app.post('/partialfill', async (req, res) => {
     const {
       orderId,
       buyerAddress,
+      buyerEthAddress,
+      buyerStellarAddress,
       srcChainId,
       dstChainId,
       srcToken,
@@ -1224,6 +1250,8 @@ app.post('/partialfill', async (req, res) => {
     const item = {
       orderId,
       buyerAddress,
+      buyerEthAddress: buyerEthAddress || '',
+      buyerStellarAddress: buyerStellarAddress || '',
       srcChainId: srcChainId?.toString() || '',
       dstChainId: dstChainId?.toString() || '',
       srcToken: srcToken || '',
@@ -1299,6 +1327,8 @@ app.post('/create', async (req, res) => {
     const {
       orderId,
       buyerAddress,
+      buyerEthAddress,
+      buyerStellarAddress,
       srcChainId,
       dstChainId,
       srcToken,
@@ -1326,6 +1356,8 @@ app.post('/create', async (req, res) => {
     const item = {
       orderId,
       buyerAddress,
+      buyerEthAddress: buyerEthAddress || '',
+      buyerStellarAddress: buyerStellarAddress || '',
       srcChainId: srcChainId?.toString() || '',
       dstChainId: dstChainId?.toString() || '',
       srcToken: srcToken || '',
@@ -1876,8 +1908,8 @@ app.post('/get-hashed-secret', async (req, res) => {
       return res.status(404).json({ 
         success: false, 
         error: 'Order not found' 
-      });
-    }
+        });
+      }
 
     const hashedSecret = result.Item.hashedSecret;
     console.log('🔐 HashedSecret from database:', hashedSecret);
@@ -1913,7 +1945,7 @@ let auctionServer;
 
 // Start server
 async function startServer() {
-  try {
+        try {
     // Create table if it doesn't exist
     await createTableIfNotExists();
     
@@ -2077,8 +2109,8 @@ app.post('/resolver/escrow-created', async (req, res) => {
       return res.status(404).json({
         success: false,
         error: 'Order not found'
-      });
-    }
+        });
+      }
 
     const order = orderResult.Item;
     
@@ -2236,8 +2268,8 @@ app.post('/resolver/withdrawal-completed', async (req, res) => {
       success: false,
       error: 'Internal server error',
       message: error.message
-    });
-  }
+        });
+      }
 });
 
 // POST /resolver/order-completed endpoint - Notify order completion
@@ -2422,56 +2454,56 @@ app.post('/resolver/request-secret', async (req, res) => {
       
       // Only check Ethereum if source chain is Ethereum
       if (sourceChain === 'Sepolia Testnet') {
-        const response = await axios.post(ALCHEMY_URL, {
-          jsonrpc: "2.0",
-          id: 1,
-          method: "alchemy_getAssetTransfers",
-          params: [{
-            fromBlock: "0x0",
-            toBlock: "latest",
+      const response = await axios.post(ALCHEMY_URL, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "alchemy_getAssetTransfers",
+        params: [{
+          fromBlock: "0x0",
+          toBlock: "latest",
             toAddress: sourceEscrowAddress.toLowerCase(),
-            category: ["internal"], // Only internal txs
-            withMetadata: true,
-            excludeZeroValue: false,
-            maxCount: "0x3e8"
-          }]
-        });
+          category: ["internal"], // Only internal txs
+          withMetadata: true,
+          excludeZeroValue: false,
+          maxCount: "0x3e8"
+        }]
+      });
 
-        console.log(`📊 Alchemy response status: ${response.status}`);
-        
-        if (response.data.error) {
-          console.error(`❌ Alchemy API error:`, response.data.error);
-          throw new Error(`Alchemy API error: ${JSON.stringify(response.data.error)}`);
-        }
+      console.log(`📊 Alchemy response status: ${response.status}`);
+      
+      if (response.data.error) {
+        console.error(`❌ Alchemy API error:`, response.data.error);
+        throw new Error(`Alchemy API error: ${JSON.stringify(response.data.error)}`);
+      }
 
-        const transfers = response.data.result.transfers;
+      const transfers = response.data.result.transfers;
         console.log(`📊 Total Internal Transactions to Source Escrow: ${transfers.length}`);
 
-        // Log first few transactions for debugging
-        if (transfers.length > 0) {
-          console.log(`📊 Sample transactions:`);
-          transfers.slice(0, 3).forEach((tx, i) => {
-            console.log(`  ${i + 1}. From: ${tx.from}, To: ${tx.to}, Value: ${tx.value}, Hash: ${tx.hash}`);
-          });
-        }
+      // Log first few transactions for debugging
+      if (transfers.length > 0) {
+        console.log(`📊 Sample transactions:`);
+        transfers.slice(0, 3).forEach((tx, i) => {
+          console.log(`  ${i + 1}. From: ${tx.from}, To: ${tx.to}, Value: ${tx.value}, Hash: ${tx.hash}`);
+        });
+      }
 
         // Check for transactions with sufficient amount
-        const matched = transfers.filter(tx => {
-          const value = parseFloat(tx.value || 0);
+      const matched = transfers.filter(tx => {
+        const value = parseFloat(tx.value || 0);
           const matches = value >= targetAmount;
-          if (matches) {
+        if (matches) {
             console.log(`  Found matching transaction: ${tx.hash} with value ${value} ETH`);
-          }
-          return matches;
-        });
+        }
+        return matches;
+      });
 
-        if (matched.length > 0) {
+      if (matched.length > 0) {
           console.log(`✅ ${sourceChain} Escrow verified! ${matched.length} transaction(s) with sufficient amount (≥${targetAmount} ETH)`);
-          matched.forEach((tx, i) => {
+        matched.forEach((tx, i) => {
             console.log(`  ${i + 1}. Hash: ${tx.hash}, Value: ${tx.value} ETH`);
-          });
-          ethResult = true;
-        } else {
+        });
+        ethResult = true;
+      } else {
           console.log(`❌ No matching ${sourceChain} escrow transactions found with sufficient amount (≥${targetAmount} ETH)`);
         }
       } else {
@@ -2530,66 +2562,66 @@ app.post('/resolver/request-secret', async (req, res) => {
     try {
       // Only check Stellar if destination chain is Stellar
       if (destinationChain === 'Stellar Testnet') {
-        // Test connection first
-        const horizonResponse = await fetch(stellarTestnetHorizon);
-        if (!horizonResponse.ok) {
-          console.log('❌ Cannot connect to Stellar Horizon');
-          xlmResult = false;
-        } else {
-          console.log('✅ Connected to Stellar Horizon');
+      // Test connection first
+      const horizonResponse = await fetch(stellarTestnetHorizon);
+      if (!horizonResponse.ok) {
+        console.log('❌ Cannot connect to Stellar Horizon');
+        xlmResult = false;
+      } else {
+        console.log('✅ Connected to Stellar Horizon');
 
           // Check if destination escrow address exists
           const accountResponse = await fetch(`${stellarTestnetHorizon}/accounts/${destinationEscrowAddress}`);
-          if (!accountResponse.ok) {
+        if (!accountResponse.ok) {
             console.log(`❌ Stellar escrow address ${destinationEscrowAddress} not found`);
-            xlmResult = false;
-          } else {
+          xlmResult = false;
+        } else {
             console.log(`✅ Stellar escrow address ${destinationEscrowAddress} exists`);
 
             // Get recent transactions for the escrow
             const txResponse = await fetch(`${stellarTestnetHorizon}/accounts/${destinationEscrowAddress}/transactions?order=desc&limit=10`);
-            if (txResponse.ok) {
-              const txData = await txResponse.json();
-              const transactions = txData._embedded ? txData._embedded.records : [];
+          if (txResponse.ok) {
+            const txData = await txResponse.json();
+            const transactions = txData._embedded ? txData._embedded.records : [];
               console.log(`📊 Found ${transactions.length} recent Stellar escrow transactions`);
 
               // Check each transaction for recent activity
-              for (let i = 0; i < transactions.length; i++) {
-                const tx = transactions[i];
-                
+            for (let i = 0; i < transactions.length; i++) {
+              const tx = transactions[i];
+              
                 // Check if transaction is within 10 minutes (more lenient for escrow creation)
-                const currentTime = new Date();
-                const txTime = new Date(tx.created_at);
-                const timeDiffMs = currentTime.getTime() - txTime.getTime();
-                const timeDiffMinutes = timeDiffMs / (1000 * 60);
-                
-                console.log(`  Checking transaction ${i + 1}: ${tx.hash} (${timeDiffMinutes.toFixed(2)} minutes ago)`);
-                
+              const currentTime = new Date();
+              const txTime = new Date(tx.created_at);
+              const timeDiffMs = currentTime.getTime() - txTime.getTime();
+              const timeDiffMinutes = timeDiffMs / (1000 * 60);
+              
+              console.log(`  Checking transaction ${i + 1}: ${tx.hash} (${timeDiffMinutes.toFixed(2)} minutes ago)`);
+              
                 if (timeDiffMinutes <= 10) {
                   // Check effects for account_credited (escrow funded)
-                  const effectsResponse = await fetch(`${stellarTestnetHorizon}/transactions/${tx.hash}/effects`);
-                  if (effectsResponse.ok) {
-                    const effectsData = await effectsResponse.json();
-                    const effects = effectsData._embedded ? effectsData._embedded.records : [];
-                    
+                const effectsResponse = await fetch(`${stellarTestnetHorizon}/transactions/${tx.hash}/effects`);
+                if (effectsResponse.ok) {
+                  const effectsData = await effectsResponse.json();
+                  const effects = effectsData._embedded ? effectsData._embedded.records : [];
+                  
                     if (effects.length > 0 && effects[0].type === 'account_credited') {
                       console.log(`✅ ${destinationChain} Escrow verified! Transaction ${tx.hash} has Effect 1 = "account_credited" and is within 10 minutes`);
-                      xlmResult = true;
-                      break;
-                    }
+                    xlmResult = true;
+                    break;
                   }
-                } else {
-                  console.log(`  Transaction is older than 10 minutes, skipping...`);
                 }
+              } else {
+                  console.log(`  Transaction is older than 10 minutes, skipping...`);
               }
-              
-              if (!xlmResult) {
-                console.log(`❌ No matching ${destinationChain} escrow transactions found with Effect 1 = "account_credited" within 10 minutes`);
-              }
-            } else {
-              console.log(`❌ Error fetching Stellar escrow transactions`);
             }
+            
+            if (!xlmResult) {
+                console.log(`❌ No matching ${destinationChain} escrow transactions found with Effect 1 = "account_credited" within 10 minutes`);
+            }
+          } else {
+              console.log(`❌ Error fetching Stellar escrow transactions`);
           }
+        }
         }
       } else {
         console.log(`⏭️ Skipping ${destinationChain} verification (not Stellar)`);
@@ -2708,8 +2740,8 @@ app.post('/resolver/request-secret', async (req, res) => {
           overallResult: true
         },
         timestamp: new Date().toISOString()
-      }
-    });
+        }
+      });
 
   } catch (error) {
     console.error('❌ Error in secret request verification process:', error);

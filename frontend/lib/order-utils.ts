@@ -11,6 +11,8 @@ export interface OrderCreationParams {
   sourceAmount: string;
   destinationAmount: string;
   buyerAddress: string;
+  buyerEthAddress?: string;  // Buyer's ETH address for cross-chain transactions
+  buyerStellarAddress?: string;  // Buyer's Stellar address for cross-chain transactions
   enablePartialFills?: boolean;
   partsCount?: number;
 }
@@ -18,6 +20,8 @@ export interface OrderCreationParams {
 export interface OrderData {
   orderId: string;
   buyerAddress: string;
+  buyerEthAddress?: string;  // Buyer's ETH address for cross-chain transactions
+  buyerStellarAddress?: string;  // Buyer's Stellar address for cross-chain transactions
   srcChainId: number | string;
   dstChainId: number | string;
   srcToken: string;
@@ -116,6 +120,8 @@ export function createOrder(params: OrderCreationParams): OrderData {
   const orderData: OrderData = {
     orderId,
     buyerAddress: params.buyerAddress,
+    buyerEthAddress: params.buyerEthAddress,
+    buyerStellarAddress: params.buyerStellarAddress,
     srcChainId,
     dstChainId,
     srcToken,
@@ -152,6 +158,8 @@ export function createOrder(params: OrderCreationParams): OrderData {
   console.log('📋 Final order data:', {
     orderId: orderData.orderId,
     buyerAddress: orderData.buyerAddress,
+    buyerEthAddress: orderData.buyerEthAddress,
+    buyerStellarAddress: orderData.buyerStellarAddress,
     srcChainId: orderData.srcChainId,
     dstChainId: orderData.dstChainId,
     srcToken: orderData.srcToken,
@@ -380,6 +388,8 @@ export async function sendOrderToRelayer(orderData: OrderData, isPartialFill: bo
   const requestBody: any = {
     orderId: orderData.orderId,
     buyerAddress: orderData.buyerAddress,
+    buyerEthAddress: orderData.buyerEthAddress,
+    buyerStellarAddress: orderData.buyerStellarAddress,
     srcChainId: orderData.srcChainId,
     dstChainId: orderData.dstChainId,
     srcToken: orderData.srcToken,

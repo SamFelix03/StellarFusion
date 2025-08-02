@@ -34,6 +34,8 @@ import Aurora from "./components/Aurora"
 interface OrderData {
   orderId: string
   buyerAddress: string
+  buyerEthAddress?: string
+  buyerStellarAddress?: string
   srcChainId: string
   dstChainId: string
   srcToken: string
@@ -56,6 +58,8 @@ interface AuctionDetails {
   auctionType: 'single' | 'segmented'
   hashedSecret: string
   buyerAddress: string
+  buyerEthAddress?: string
+  buyerStellarAddress?: string
   
   // Auction participants
   winner?: string | null

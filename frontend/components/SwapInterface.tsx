@@ -415,8 +415,26 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
       setShowLoadingModal(true)
       setLoadingStep(1) // Step 1: Order creation
       
+      // Collect both addresses for cross-chain transactions
+      const buyerEthAddress = address || ""
+      const buyerStellarAddress = stellarWallet?.publicKey || ""
+      
+      // Validate addresses based on transaction type
+      const isEthereumSource = swapState.fromChain === "Sepolia Testnet" || swapState.toChain === "Sepolia Testnet"
+      const isStellarSource = swapState.fromChain === "Stellar Testnet" || swapState.toChain === "Stellar Testnet"
+      
+      if (isEthereumSource && !buyerEthAddress) {
+        throw new Error('Ethereum address required for this transaction')
+      }
+      
+      if (isStellarSource && !buyerStellarAddress) {
+        throw new Error('Stellar address required for this transaction')
+      }
+      
       const orderData = createOrder({
-        buyerAddress: address || stellarWallet?.publicKey || "",
+        buyerAddress: buyerEthAddress || buyerStellarAddress, // Primary address (source chain)
+        buyerEthAddress: buyerEthAddress,
+        buyerStellarAddress: buyerStellarAddress,
         sourceChain: swapState.fromChain,
         destinationChain: swapState.toChain,
         sourceToken: swapState.fromToken?.symbol || "",
@@ -427,10 +445,9 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
         partsCount: enablePartialFills ? partsCount : undefined
       })
 
-      console.log('📊 Order creation - buyer address:', address || stellarWallet?.publicKey || "")
-      console.log('📊 Order creation - address:', address)
-      console.log('📊 Order creation - stellarWallet?.publicKey:', stellarWallet?.publicKey)
-      console.log('📊 Order creation - final buyerAddress:', orderData.buyerAddress)
+      console.log('📊 Order creation - ETH address:', buyerEthAddress)
+      console.log('📊 Order creation - Stellar address:', buyerStellarAddress)
+      console.log('📊 Order creation - primary buyerAddress:', orderData.buyerAddress)
       setOrderData(orderData)
       setShowOrderDetails(true)
       setShowLoadingModal(false)

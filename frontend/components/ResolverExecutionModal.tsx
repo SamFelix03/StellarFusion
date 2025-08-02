@@ -73,7 +73,7 @@ export default function ResolverExecutionModal({
       {
         id: 'resolver-declared',
         title: 'Resolver Declared',
-        description: 'Resolver has been declared as the winner of this auction',
+        description: 'You have been declared as the resolver for this order',
         status: 'pending',
         icon: <Trophy className="w-5 h-5" />
       },
@@ -276,13 +276,22 @@ export default function ResolverExecutionModal({
       updateStepStatus('destination-escrow', 'in-progress')
       console.log('📝 Step 3: Creating destination escrow on destination chain...')
       
+      // Get the correct buyer address for the destination chain
+      const destinationBuyerAddress = resolverContractManager.getBuyerAddressForChain(
+        auction, 
+        orderExecution.destinationChain
+      )
+      
+      console.log(`🔗 Using buyer address for destination chain (${orderExecution.destinationChain}): ${destinationBuyerAddress}`)
+      
       // Create destination escrow on the DESTINATION chain
       const destinationResult = orderExecution.destinationChain === 'stellar-testnet'
         ? await resolverContractManager.createDestinationEscrowStellar(
             orderExecution.destinationChain,
             orderExecution.hashedSecret,
-            orderExecution.buyerAddress,
+            destinationBuyerAddress,
             orderExecution.destinationAmount,
+            orderExecution.stellarKeypair,
             orderExecution.isPartialFill,
             orderExecution.segmentIndex,
             orderExecution.totalParts
@@ -291,7 +300,7 @@ export default function ResolverExecutionModal({
             orderExecution.destinationChain,
             orderExecution.orderId,
             orderExecution.hashedSecret,
-            orderExecution.buyerAddress,
+            destinationBuyerAddress,
             orderExecution.destinationAmount,
             orderExecution.evmSigner!,
             orderExecution.isPartialFill,
@@ -361,7 +370,7 @@ export default function ResolverExecutionModal({
       }
       
       const sourceWithdrawalResult = orderExecution.sourceChain === 'stellar-testnet'
-        ? await resolverContractManager.withdrawFromStellarEscrow(sourceWithdrawalParams)
+        ? await resolverContractManager.withdrawFromStellarEscrow(sourceWithdrawalParams, orderExecution.stellarKeypair)
         : await resolverContractManager.withdrawFromEVMEscrow(sourceWithdrawalParams, orderExecution.evmSigner!)
       
       if (!sourceWithdrawalResult.success) {
@@ -390,7 +399,7 @@ export default function ResolverExecutionModal({
       }
       
       const destinationWithdrawalResult = orderExecution.destinationChain === 'stellar-testnet'
-        ? await resolverContractManager.withdrawFromStellarEscrow(destinationWithdrawalParams)
+        ? await resolverContractManager.withdrawFromStellarEscrow(destinationWithdrawalParams, orderExecution.stellarKeypair)
         : await resolverContractManager.withdrawFromEVMEscrow(destinationWithdrawalParams, orderExecution.evmSigner!)
       
       if (!destinationWithdrawalResult.success) {
@@ -543,7 +552,7 @@ export default function ResolverExecutionModal({
             <div className="grid grid-cols-2 gap-4 text-sm">
               <div className="bg-black/20 rounded-lg p-3">
                 <span className="text-white/60 text-xs uppercase tracking-wide">Order ID</span>
-                <div className="font-mono text-white text-sm mt-1">{auction?.orderId || 'N/A'}</div>
+                <div className="font-mono text-white text-sm mt-1">{auction?.orderId.slice(0, 6) + '...' + auction?.orderId.slice(-6) || 'N/A'}</div>
               </div>
               <div className="bg-black/20 rounded-lg p-3">
                 <span className="text-white/60 text-xs uppercase tracking-wide">Auction Type</span>
@@ -584,7 +593,7 @@ export default function ResolverExecutionModal({
                 </div>
               </div>
               <div className="bg-black/20 rounded-lg p-3">
-                <span className="text-white/60 text-xs uppercase tracking-wide">Winner Address</span>
+                <span className="text-white/60 text-xs uppercase tracking-wide">Resolver Address</span>
                 <div className="font-mono text-white text-sm mt-1">
                   {formatAddress(getWalletAddress(address ? { address } : stellarWallet))}
                 </div>
