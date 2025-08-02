@@ -300,8 +300,6 @@ public static hashSecret(secret: string): string {
 }
 ```
 
-```
-
 #### Relayer Integration
 
 The frontend sends order data to the relayer through the `sendOrderToRelayer()` function:
@@ -656,3 +654,146 @@ The following data structure is transmitted to the relayer for partial fills:
 - **Flexible Execution**: Resolvers can choose which parts to fill based on availability
 - **Atomic Security**: Each part maintains atomic execution guarantees
 - **Real-time Progress**: Users can track completion status of individual segments
+
+---
+
+## Dutch Auction
+
+### Fusion+ Swaps (Single Auction)
+
+The Dutch auction mechanism for Fusion+ swaps operates as a single auction system that dynamically adjusts pricing based on market conditions and order size. This system ensures optimal price discovery and efficient order execution for complete cross-chain swaps.
+
+#### Auction Initialization
+
+When a Fusion+ swap order is created, the Dutch auction system initializes with the following parameters:
+
+- **Starting Price**: Slightly higher than the market price
+- **Minimum Price**: Market price × (1 - slippage) (e.g., $3,822 for 2% slippage)
+- **Price Reduction**: 5% of current price every 10 seconds
+
+#### Auction Flow
+
+1. **Order Creation**: Frontend sends order data to relayer with `hashedSecret` and `buyerAddress`
+2. **Auction Start**: `startSingleAuction()` function initializes the auction with calculated parameters
+3. **Price Broadcasting**: Real-time price updates are broadcast to all connected clients 
+4. **Resolver Participation**: Resolvers can join the auction and monitor price movements
+5. **Winner Confirmation**: First resolver to confirm at current price becomes the winner
+
+#### Client Communication
+
+The auction system maintains real-time communication with resolvers through WebSocket connections:
+
+```javascript
+// From server.js lines 650-680
+this.broadcastToAll({
+  type: 'single_auction_update',
+  orderId: orderId,
+  currentPrice: Math.round(auction.currentPrice * 100) / 100,
+  startPrice: auction.startPrice,
+  endPrice: auction.minimumPrice,
+  marketPrice: auction.marketPrice,
+  hashedSecret: auction.hashedSecret,
+  buyerAddress: auction.buyerAddress
+});
+```
+
+#### Auction Completion
+
+Upon completion, the system updates the order status and broadcasts final results:
+
+```javascript
+// From server.js lines 896-930
+const auctionData = {
+  winner: auction.winner || null,
+  finalPrice: Math.floor(auction.currentPrice),
+  startPrice: auction.startPrice,
+  endPrice: auction.minimumPrice,
+  marketPrice: auction.marketPrice,
+  sourceAmount: auction.sourceAmount,
+  slippage: auction.slippage,
+  auctionType: 'single',
+  status: status,
+  completedAt: new Date().toISOString()
+};
+```
+
+### Partial Fills (Segmented Auction)
+
+The Dutch auction mechanism for partial fills operates as a segmented auction system that divides large orders into multiple smaller segments, each with independent pricing and execution. This system enables improved liquidity and risk mitigation for large cross-chain swaps.
+
+#### Auction Initialization
+
+When a partial fill order is created, the Dutch auction system initializes with segmented parameters:
+
+- **Total Segments**: segments of various size
+- **Starting Prices**: Different starting prices for each segment based on market conditions
+- **Price Reduction**: 5% of current price every 10 seconds per segment
+
+#### Individual Segment Management
+
+Each segment operates independently with its own price reduction mechanism:
+
+```javascript
+// From server.js lines 710-740
+const interval = setInterval(() => {
+  if (segment.winner) {
+    clearInterval(interval);
+    return;
+  }
+  
+  // Calculate price reduction (5% of current price)
+  const priceReduction = segment.currentPrice * 0.05;
+  segment.currentPrice = Math.max(segment.endPrice, segment.currentPrice - priceReduction);
+  
+  // Broadcast updated price for this segment
+  this.broadcastToAll({
+    type: 'segment_update',
+    orderId: orderId,
+    segmentId: segmentId,
+    currentPrice: Math.round(segment.currentPrice * 100) / 100
+  });
+}, 10000);
+```
+
+#### Segment Winner Determination
+
+Each segment can have its own winner, allowing for distributed execution:
+
+```javascript
+// From server.js lines 180-200
+if (segment && segment.status === 'active' && !segment.winner) {
+  segment.winner = data.name;
+  
+  console.log(`\n🎉 SEGMENT ${segmentId} WINNER: ${data.name} confirmed at price ${Math.floor(segment.currentPrice)}!`);
+  
+  // End this specific segment
+  this.endSegment(confirmOrderId, segmentId, 'completed');
+}
+```
+
+#### Comprehensive Auction Results
+
+Upon completion of all segments, the system calculates comprehensive results:
+
+```javascript
+// From server.js lines 850-880
+const totalWinners = auction.totalWinners.filter(win => win.winner !== null).length;
+const totalAmount = auction.totalWinners.reduce((sum, win) => sum + win.amount, 0);
+const totalValue = auction.totalWinners.reduce((sum, win) => sum + (win.price * win.amount), 0);
+const effectiveRate = totalValue / totalAmount;
+
+console.log(`\n📊 SEGMENTED AUCTION RESULTS for order ${orderId}:`);
+console.log(`🏆 Total winners: ${totalWinners}`);
+console.log(`💰 Total amount: ${totalAmount}`);
+console.log(`💵 Total value: ${totalValue}`);
+console.log(`📈 Effective rate: ${effectiveRate.toFixed(2)}`);
+```
+#### Key Advantages of Segmented Auctions
+
+- **Improved Liquidity**: Multiple resolvers can participate simultaneously
+- **Risk Mitigation**: Large orders are distributed across multiple segments
+- **Flexible Execution**: Resolvers can choose which segments to fill
+- **Atomic Security**: Each segment maintains independent cryptographic verification
+- **Real-time Progress**: Users can track completion status of individual segments
+
+---
