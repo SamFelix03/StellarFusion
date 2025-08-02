@@ -13,17 +13,27 @@ export interface SingleAuction {
   orderId: string
   orderType: 'normal'
   auctionType: 'single'
-  hashedSecret: string // Include hashedSecret for resolver
-  buyerAddress: string // Include buyerAddress for resolver
+  // Database fields (now included in all auction objects)
+  hashedSecret: string
+  buyerAddress: string
+  srcChainId: string
+  dstChainId: string
+  srcToken: string
+  dstToken: string
+  srcAmount: string
+  dstAmount: string
+  status: string
+  createdAt: string
+  market_price: string
+  slippage: string
+  // Auction-specific calculated fields
   currentPrice: number
   startPrice: number
   endPrice: number
   minimumPrice: number
   sourceAmount: number
   marketPrice: number
-  slippage: number
   winner: string | null
-  status: 'active' | 'completed' | 'expired'
   endTime: number | null
 }
 
@@ -31,13 +41,24 @@ export interface SegmentedAuction {
   orderId: string
   orderType: 'partialfill'
   auctionType: 'segmented'
-  hashedSecret: string // Include hashedSecret for resolver
-  buyerAddress: string // Include buyerAddress for resolver
+  // Database fields (now included in all auction objects)
+  hashedSecret: string
+  buyerAddress: string
+  srcChainId: string
+  dstChainId: string
+  srcToken: string
+  dstToken: string
+  srcAmount: string
+  dstAmount: string
+  status: string
+  createdAt: string
+  market_price: string
+  slippage: string
+  // Auction-specific calculated fields
   segments: AuctionSegment[]
   totalWinners: any[]
   marketPrice: number
   sourceAmount: number
-  slippage: number
   minimumPrice: number
   intervals: any[]
 }
@@ -219,17 +240,27 @@ class DutchAuctionClient implements AuctionClient {
             orderId: data.orderId,
             orderType: 'normal',
             auctionType: 'single',
+            // Database fields (now included in all auction objects)
+            hashedSecret: data.hashedSecret || '',
+            buyerAddress: data.buyerAddress || '',
+            srcChainId: data.srcChainId || '',
+            dstChainId: data.dstChainId || '',
+            srcToken: data.srcToken || '',
+            dstToken: data.dstToken || '',
+            srcAmount: data.srcAmount || '',
+            dstAmount: data.dstAmount || '',
+            status: data.status || 'active',
+            createdAt: data.createdAt || '',
+            market_price: data.market_price || '',
+            slippage: data.slippage || '',
+            // Auction-specific calculated fields
             currentPrice: data.currentPrice,
             startPrice: data.startPrice,
             endPrice: data.endPrice,
             minimumPrice: data.endPrice, // endPrice is the minimum price
             sourceAmount: data.sourceAmount,
             marketPrice: data.marketPrice,
-            slippage: data.slippage,
-            hashedSecret: data.hashedSecret, // Include hashedSecret for resolver
-            buyerAddress: data.buyerAddress, // Include buyerAddress for resolver
             winner: null,
-            status: 'active',
             endTime: null
           }
           console.log('📤 Calling newAuction callback with:', auction)
@@ -245,13 +276,24 @@ class DutchAuctionClient implements AuctionClient {
              orderId: data.orderId,
              orderType: 'partialfill',
              auctionType: 'segmented',
-             hashedSecret: data.hashedSecret || '', // Include hashedSecret for resolver
+             // Database fields (now included in all auction objects)
+             hashedSecret: data.hashedSecret || '',
+             buyerAddress: data.buyerAddress || '',
+             srcChainId: data.srcChainId || '',
+             dstChainId: data.dstChainId || '',
+             srcToken: data.srcToken || '',
+             dstToken: data.dstToken || '',
+             srcAmount: data.srcAmount || '',
+             dstAmount: data.dstAmount || '',
+             status: data.status || 'active',
+             createdAt: data.createdAt || '',
+             market_price: data.market_price || '',
+             slippage: data.slippage || '',
+             // Auction-specific calculated fields
              segments: data.segments || [],
-             buyerAddress: data.buyerAddress, // Include buyerAddress for resolver
              totalWinners: [],
              marketPrice: data.marketPrice,
              sourceAmount: data.sourceAmount,
-             slippage: data.slippage,
              minimumPrice: data.minimumPrice,
              intervals: []
            }
@@ -267,17 +309,27 @@ class DutchAuctionClient implements AuctionClient {
             orderId: data.orderId,
             orderType: 'normal',
             auctionType: 'single',
+            // Database fields (now included in all auction objects)
+            hashedSecret: data.hashedSecret || '',
+            buyerAddress: data.buyerAddress || '',
+            srcChainId: data.srcChainId || '',
+            dstChainId: data.dstChainId || '',
+            srcToken: data.srcToken || '',
+            dstToken: data.dstToken || '',
+            srcAmount: data.srcAmount || '',
+            dstAmount: data.dstAmount || '',
+            status: data.status || 'active',
+            createdAt: data.createdAt || '',
+            market_price: data.market_price || '',
+            slippage: data.slippage || '',
+            // Auction-specific calculated fields
             currentPrice: data.currentPrice,
             startPrice: data.startPrice,
             endPrice: data.endPrice,
             minimumPrice: data.endPrice,
             sourceAmount: data.sourceAmount || 0,
             marketPrice: data.marketPrice,
-            slippage: data.slippage || 0.02,
-            hashedSecret: data.hashedSecret || '', // Include hashedSecret for resolver
-            buyerAddress: data.buyerAddress, // Include buyerAddress for resolver
             winner: null,
-            status: 'active',
             endTime: null
           }
           console.log('📤 Calling auctionUpdate callback with:', auction)
