@@ -5,13 +5,13 @@
 1. [Introduction](#introduction)
 
 2. [Order Creation](#order-creation)
-   - [Fusion+ Swaps](#normal-fusion-swaps)
+   - [Fusion+ Swaps](#fusion-swaps)
    - [Partial Fills](#partial-fills)
 
 3. [Dutch Auction](#dutch-auction)
 
 4. [Escrow Creations](#escrow-creations)
-   - [Fusion+ Swaps](#normal-fusion-swaps)
+   - [Fusion+ Swaps](#fusion-swaps)
    - [Partial Fills](#partial-fills)
 
 5. [Validation and Checking](#validation-and-checking)
