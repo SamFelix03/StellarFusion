@@ -11,8 +11,8 @@
 3. [Dutch Auction](#dutch-auction)
 
 4. [Escrow Creations](#escrow-creations)
-   - [Fusion+ Swaps](#fusion-swaps-escrow)
-   - [Partial Fills](#partial-fills-escrow)
+   - [Escrow Creations in Fusion+ Swaps](#fusion-swaps-escrow)
+   - [Escrow Creations in Partial Fills](#partial-fills-escrow)
 
 5. [Validation and Checking](#validation-and-checking)
 
@@ -405,7 +405,7 @@ console.log(`📈 Effective rate: ${effectiveRate.toFixed(2)}`);
 
 ## Escrow Creations
 
-### Fusion+ Swaps {#fusion-swaps-escrow}
+### Escrow Creations in Fusion+ Swaps
 
 Fusion+ Swaps escrow creation represents the critical phase where atomic swap execution is initiated through escrow contracts. This section details the comprehensive flow from auction winner selection to smart contract deployment and security deposit management.
 
@@ -875,7 +875,7 @@ The escrow creation process ensures perfect coordination between chains:
 
 ---
 
-### Partial Fills {#partial-fills-escrow}
+### Escrow Creations in Partial Fills
 
 Partial Fills escrow creation represents an advanced cross-chain atomic swap mechanism that enables large orders to be executed through multiple smaller segments, each with independent cryptographic verification. This section details the comprehensive flow from segmented auction completion to Merkle tree-based escrow creation and multi-chain coordination.
 
@@ -1097,6 +1097,154 @@ pub fn fill_order(
 
     // Mark part as filled
     env.storage().persistent().set(&DataKey::PartsFilled(order_hash.clone(), part_index), &true);
+
+    escrow_address
+}
+```
+
+#### Cross-Chain Partial Fill Destination Escrow Creation
+
+For partial fills, destination escrows are created on the destination chain with segment-specific parameters that enable individual segment withdrawal through Merkle proof verification:
+
+**Ethereum Partial Fill Destination Escrow Creation:**
+```solidity
+// From EscrowFactory.sol lines 175-220
+function createDstEscrow(
+    bytes32 hashedSecret,            // Merkle root for all segments
+    address recipient,
+    address buyer,
+    uint256 tokenAmount,             // Segment destination amount
+    uint256 withdrawalStart,
+    uint256 publicWithdrawalStart,
+    uint256 cancellationStart,
+    uint256 publicCancellationStart,
+    uint256 partIndex,               // Segment index (0-3)
+    uint16 totalParts                // Total segments (4)
+) external payable nonReentrant {
+    require(msg.value == DEPOSIT_AMOUNT, "Incorrect ETH deposit");
+    require(tokenAmount > 0, "Token amount must be > 0");
+    require(recipient != address(0), "Invalid recipient");
+    require(buyer != address(0), "Invalid buyer");
+    
+    // Validate time window progression
+    require(
+        publicWithdrawalStart > withdrawalStart &&
+        cancellationStart > publicWithdrawalStart &&
+        publicCancellationStart > cancellationStart,
+        "Invalid time windows"
+    );
+
+    // Check if this is a partial fill
+    bool isPartialFill = totalParts > 1;
+    if (isPartialFill) {
+        require(partIndex < totalParts, "Invalid part index");
+        require(!partialFillsUsed[hashedSecret][partIndex], "Part already used");
+        
+        // Mark this part as used and update tracking
+        partialFillsUsed[hashedSecret][partIndex] = true;
+        partialFillsCount[hashedSecret]++;
+    }
+
+    // Create DestinationEscrow contract with partial fill support
+    DestinationEscrow escrow = new DestinationEscrow{value: msg.value}(
+        buyer,  // Creator
+        recipient,
+        hashedSecret,                // Merkle root
+        WETH,
+        tokenAmount,                 // Segment destination amount
+        withdrawalStart,
+        publicWithdrawalStart,
+        cancellationStart,
+        publicCancellationStart,
+        partIndex,                   // Segment index
+        totalParts                   // Total segments
+    );
+
+    address escrowAddress = address(escrow);
+    userEscrows[buyer].push(escrowAddress);
+    isEscrowContract[escrowAddress] = true;
+
+    emit DstEscrowCreated(
+        buyer,
+        recipient,
+        escrowAddress,
+        hashedSecret,
+        tokenAmount,
+        withdrawalStart,
+        publicWithdrawalStart,
+        cancellationStart,
+        publicCancellationStart,
+        partIndex,
+        totalParts
+    );
+}
+```
+
+**Stellar Partial Fill Destination Escrow Creation:**
+```rust
+// From resolver/src/lib.rs lines 304-350
+pub fn create_destination_escrow(
+    env: Env,
+    recipient: Address,
+    buyer: Address,
+    hashed_secret: BytesN<32>,       // Merkle root for all segments
+    token_amount: i128,              // Segment destination amount
+    withdrawal_start: u64,
+    public_withdrawal_start: u64,
+    cancellation_start: u64,
+    public_cancellation_start: u64,
+    part_index: u64,                 // Segment index
+    total_parts: u32,                // Total segments
+) -> Address {
+    // Validate inputs
+    if total_parts == 0 {
+        panic!("Total parts must be > 0");
+    }
+    if part_index >= total_parts as u64 {
+        panic!("Invalid part index");
+    }
+    if token_amount <= 0 {
+        panic!("Token amount must be > 0");
+    }
+
+    // Check if this part is already used
+    let part_used: bool = env.storage()
+        .persistent()
+        .get(&DataKey::PartialFillUsed(hashed_secret.clone(), part_index))
+        .unwrap_or(false);
+    if part_used {
+        panic!("Part already used");
+    }
+
+    // Mark this part as used
+    env.storage().persistent().set(&DataKey::PartialFillUsed(hashed_secret.clone(), part_index), &true);
+
+    // Get factory address and create destination escrow
+    let factory_address: Address = env.storage().instance().get(&DataKey::EscrowFactory).unwrap();
+    let factory_client = EscrowFactoryTraitClient::new(&env, &factory_address);
+    
+    // Create destination escrow using factory client with partial fill support
+    let escrow_address = factory_client.create_dst_escrow_partial(
+        &env.current_contract_address(), // creator (resolver)
+        &hashed_secret,                  // Merkle root
+        &recipient,
+        &buyer,
+        &token_amount,                   // Segment destination amount
+        &withdrawal_start,
+        &public_withdrawal_start,
+        &cancellation_start,
+        &public_cancellation_start,
+        &part_index,                     // Segment index
+        &total_parts,                    // Total segments
+    );
+
+    // Track the destination escrow creation
+    let mut dst_escrows: Vec<Address> = env.storage()
+        .persistent()
+        .get(&DataKey::DestinationEscrows(hashed_secret.clone()))
+        .unwrap_or(Vec::new(&env));
+    dst_escrows.push_back(escrow_address.clone());
+    env.storage().persistent().set(&DataKey::DestinationEscrows(hashed_secret.clone()), &dst_escrows);
 
     escrow_address
 }
