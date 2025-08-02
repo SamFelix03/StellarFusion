@@ -1772,3 +1772,280 @@ The secret exchange process includes multiple security measures:
 - **Timeout Protection**: Automatic timeout if secrets aren't shared
 
 ---
+
+## Withdrawal
+
+The withdrawal process is the final step in the atomic swap execution, where funds are released from escrow contracts using the shared secret. StellarFusion implements a multi-stage timelock system with hash-locked escrows to ensure secure and atomic cross-chain transfers.
+
+### Time Lock System
+
+StellarFusion uses a four-tier time lock system to ensure secure atomic execution:
+
+```typescript
+// Time lock parameters (in seconds)
+const TIME_LOCKS = {
+  WITHDRAWAL_START: 60,        // 1 minute - withdrawal begins
+  PUBLIC_WITHDRAWAL: 300,      // 5 minutes - public withdrawal window
+  CANCELLATION_START: 600,     // 10 minutes - cancellation begins
+  PUBLIC_CANCELLATION: 900     // 15 minutes - public cancellation
+};
+```
+
+#### Time Lock Stages
+
+1. **Private Withdrawal Window** (1-5 minutes): Only authorized parties can withdraw
+2. **Public Withdrawal Window** (5-10 minutes): Anyone with the secret can withdraw
+3. **Private Cancellation Window** (10-15 minutes): Only creator can cancel
+4. **Public Cancellation Window** (15+ minutes): Anyone can cancel
+
+### Hash Lock Implementation
+
+The withdrawal process relies on SHA256 hash locks for cross-chain compatibility:
+
+```typescript
+// From hash-lock.ts
+public static hashSecret(secret: string): string {
+    if (!secret.startsWith('0x') || secret.length !== 66) {
+        throw new Error('secret must be 32 bytes hex encoded with 0x prefix');
+    }
+    
+    const hash = createHash('sha256');
+    hash.update(Buffer.from(secret.slice(2), 'hex'));
+    return '0x' + hash.digest('hex');
+}
+```
+
+### Ethereum Source Escrow Withdrawal
+
+Source escrows hold the seller's funds on Ethereum and are withdrawn by the resolver:
+
+#### Withdrawal Function
+```solidity
+// From EscrowFactory.sol lines 295-325
+function withdraw(bytes calldata secret) external nonReentrant {
+    require(!fundsWithdrawn, "Funds already withdrawn");
+    require(!cancelled, "Escrow cancelled");
+    require(block.timestamp >= withdrawalStart, "Withdrawal not started");
+    require(block.timestamp < cancellationStart, "Withdrawal period ended");
+    
+    // Caller must be the recipient during private window
+    if (block.timestamp < publicWithdrawalStart) {
+        require(msg.sender == recipient, "Only recipient in private window");
+    }
+    
+    // Use SHA256 instead of keccak256 for Stellar compatibility
+    require(sha256(secret) == hashedSecret, "Invalid secret");
+
+    fundsWithdrawn = true;
+    
+    // Unwrap WETH to ETH and send to caller (resolver)
+    IWETH(token).withdraw(amount);
+    (bool success, ) = msg.sender.call{value: amount}("");
+    require(success, "ETH transfer failed");
+    
+    // Transfer security deposit to caller (resolver)
+    (bool depositSuccess, ) = msg.sender.call{value: securityDeposit}("");
+    require(depositSuccess, "ETH transfer failed");
+    
+    emit Withdrawal(msg.sender, secret);
+}
+```
+
+#### Partial Fill Support
+```solidity
+// From EscrowFactory.sol lines 328-365
+function withdrawWithProof(
+    bytes calldata secret,
+    bytes32[] calldata merkleProof
+) external nonReentrant {
+    require(isPartialFill, "Use withdraw() for complete fills");
+    
+    // Verify merkle proof for partial fills
+    bytes32 secretHash = sha256(secret);
+    bytes32 leaf = PartialFillHelper.generateLeaf(partIndex, secretHash);
+    require(MerkleProof.verify(merkleProof, hashedSecret, leaf), "Invalid merkle proof");
+    
+    // Same withdrawal logic as above
+}
+```
+
+### Ethereum Destination Escrow Withdrawal
+
+Destination escrows hold the buyer's funds on the destination chain (BSC):
+
+#### Key Differences from Source Escrow
+```solidity
+// From EscrowFactory.sol lines 480-520
+function withdraw(bytes calldata secret) external nonReentrant {
+    // Same validation logic as source escrow
+    
+    // During private window, both recipient (buyer) and creator (resolver) can withdraw
+    if (block.timestamp < publicWithdrawalStart) {
+        require(msg.sender == recipient || msg.sender == creator, 
+                "Only recipient or creator in private window");
+    }
+    
+    // Funds ALWAYS go to recipient (buyer), regardless of who calls
+    IWETH(token).withdraw(amount);
+    (bool success, ) = recipient.call{value: amount}("");
+    require(success, "BNB transfer failed");
+    
+    // Security deposit goes to caller (resolver if resolver calls, buyer if buyer calls)
+    (bool depositSuccess, ) = msg.sender.call{value: securityDeposit}("");
+    require(depositSuccess, "BNB transfer failed");
+}
+```
+
+### Stellar Source Escrow Withdrawal
+
+Stellar source escrows use the same time lock and hash lock principles:
+
+#### Withdrawal Implementation
+```rust
+// From lib.rs lines 360-415
+pub fn withdraw_src_escrow(
+    env: Env,
+    caller: Address,
+    escrow_address: Address,
+    secret: Bytes,
+) {
+    caller.require_auth();
+    
+    let mut escrow_data: SourceEscrowData = env.storage()
+        .persistent()
+        .get(&DataKey::SourceEscrow(escrow_address.clone()))
+        .unwrap_or_else(|| panic!("Invalid address"));
+    
+    // Validate escrow state and time locks
+    if escrow_data.funds_withdrawn {
+        panic!("Already withdrawn");
+    }
+    if escrow_data.cancelled {
+        panic!("Already cancelled");
+    }
+    
+    let current_time = env.ledger().timestamp();
+    if current_time < escrow_data.withdrawal_start {
+        panic!("Withdrawal not started");
+    }
+    if current_time >= escrow_data.cancellation_start {
+        panic!("Withdrawal ended");
+    }
+    
+    // Private window check - only recipient (resolver) can withdraw
+    if current_time < escrow_data.public_withdrawal_start {
+        if caller != escrow_data.recipient {
+            panic!("Only recipient in private window");
+        }
+    }
+    
+    // Verify secret using SHA256
+    let computed_hash = env.crypto().sha256(&secret);
+    let computed_bytes = BytesN::from_array(&env, &computed_hash.to_array());
+    if computed_bytes != escrow_data.hashed_secret {
+        panic!("Invalid secret");
+    }
+    
+    // Mark as withdrawn and transfer funds
+    escrow_data.funds_withdrawn = true;
+    env.storage().persistent().set(&DataKey::SourceEscrow(escrow_address.clone()), &escrow_data);
+    
+    // Transfer funds to caller (resolver)
+    Self::transfer_tokens(&env, &escrow_data.token, &env.current_contract_address(), &caller, escrow_data.amount, false);
+    
+    // Transfer security deposit to caller (resolver)
+    Self::transfer_tokens(&env, &escrow_data.token, &env.current_contract_address(), &caller, escrow_data.security_deposit, false);
+}
+```
+
+### Stellar Destination Escrow Withdrawal
+
+Stellar destination escrows mirror the Ethereum destination escrow behavior:
+
+#### Key Features
+```rust
+// From lib.rs lines 485-540
+pub fn withdraw_dst_escrow(
+    env: Env,
+    caller: Address,
+    escrow_address: Address,
+    secret: Bytes,
+) {
+    // Same validation logic as source escrow
+    
+    // Check private window - both recipient (buyer) and creator (resolver) can withdraw
+    if current_time < escrow_data.public_withdrawal_start {
+        if caller != escrow_data.recipient && caller != escrow_data.creator {
+            panic!("Private window only");
+        }
+    }
+    
+    // Transfer funds to recipient (buyer) regardless of who calls - matches EVM behavior
+    Self::transfer_tokens(&env, &escrow_data.token, &env.current_contract_address(), &escrow_data.recipient, escrow_data.amount, false);
+    
+    // Transfer security deposit to caller
+    Self::transfer_tokens(&env, &escrow_data.token, &env.current_contract_address(), &caller, escrow_data.security_deposit, false);
+}
+```
+
+### Cancellation and Rescue Mechanisms
+
+Both Ethereum and Stellar contracts include cancellation and rescue functions:
+
+#### Cancellation
+```solidity
+// From EscrowFactory.sol lines 370-405
+function cancel() external nonReentrant {
+    require(!fundsWithdrawn, "Funds already withdrawn");
+    require(!cancelled, "Already cancelled");
+    require(block.timestamp >= cancellationStart, "Cancellation not started");
+    require(block.timestamp < publicCancellationStart, "Private cancellation ended");
+    require(msg.sender == creator, "Only creator can cancel");
+    
+    cancelled = true;
+    
+    // Return funds to creator
+    IWETH(token).withdraw(amount);
+    (bool success, ) = creator.call{value: amount}("");
+    require(success, "ETH transfer failed");
+    
+    // Refund security deposit to creator
+    (bool depositSuccess, ) = creator.call{value: securityDeposit}("");
+    require(depositSuccess, "ETH transfer failed");
+}
+```
+
+#### Rescue Function
+```solidity
+// From EscrowFactory.sol lines 405-430
+function rescue() external nonReentrant {
+    require(!fundsWithdrawn, "Funds already withdrawn");
+    require(!cancelled, "Already cancelled");
+    require(block.timestamp >= publicCancellationStart + RESCUE_DELAY, "Rescue not available");
+    require(msg.sender == recipient, "Only recipient can rescue");
+    
+    fundsWithdrawn = true;
+    
+    // Transfer funds to recipient
+    IWETH(token).withdraw(amount);
+    (bool success, ) = recipient.call{value: amount}("");
+    require(success, "ETH transfer failed");
+    
+    // Refund security deposit to creator
+    (bool depositSuccess, ) = creator.call{value: securityDeposit}("");
+    require(depositSuccess, "ETH transfer failed");
+}
+```
+
+### Withdrawal Flow Summary
+
+1. **Secret Exchange**: Buyer shares the secret with the resolver
+2. **Time Lock Validation**: Contract checks current time against withdrawal windows
+3. **Hash Lock Verification**: SHA256 hash of secret must match stored hash
+4. **Access Control**: Private window restrictions apply based on caller identity
+5. **Fund Transfer**: Funds are transferred to appropriate recipient
+6. **Security Deposit**: Security deposit is returned to the caller
+7. **State Update**: Escrow is marked as withdrawn to prevent double-spending
+
+---
+
