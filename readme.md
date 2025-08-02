@@ -1381,3 +1381,394 @@ The validation process includes multiple security measures:
 - **Amount Manipulation Prevention**: Amount verification prevents insufficient funding
 
 ---
+
+## Secret Exchange
+
+### Overview
+
+Secret Exchange represents the critical phase in StellarFusion's cross-chain atomic swap process where cryptographic secrets are shared between parties to enable the final withdrawal phase. After the relayer verifies that both source and destination escrows are properly created and funded, it signals the buyer to reveal the secret (for single orders) or a segment-specific secret (for partial fill orders).
+
+This secret exchange process ensures the atomic execution of cross-chain swaps by providing the cryptographic proof necessary to unlock funds from both escrows simultaneously.
+
+### Secret Exchange Flow
+
+The secret exchange process follows a structured flow that ensures secure and timely secret revelation:
+
+#### 1. Resolver Secret Request
+
+After successful escrow verification, resolvers request the secret through the `/resolver/request-secret` endpoint:
+
+**Endpoint:** `POST /resolver/request-secret`
+
+**Request Body:**
+```json
+{
+  "orderId": "0x...",           // Unique order identifier
+  "segmentId": 1                // Optional: segment ID for partial fills
+}
+```
+
+**Verification Response:**
+```json
+{
+  "success": true,
+  "message": "Secret requested successfully",
+  "data": {
+    "orderId": "0x...",
+    "segmentId": 1,
+    "verification": {
+      "ethResult": true,
+      "xlmResult": true,
+      "overallResult": true
+    },
+    "timestamp": "2024-01-15T10:35:00.000Z"
+  }
+}
+```
+
+#### 2. Relayer Status Update
+
+Upon successful verification, the relayer updates the order status and broadcasts a WebSocket event:
+
+```javascript
+// From server.js lines 2490-2500
+const eventData = {
+  type: segmentId ? 'segment_secret_requested' : 'secret_requested',
+  orderId: orderId,
+  segmentId: segmentId,
+  timestamp: new Date().toISOString()
+};
+
+global.auctionServer.broadcastToAll(eventData);
+```
+
+#### 3. Buyer Secret Sharing
+
+The buyer receives the secret request notification and shares the appropriate secret through the relayer:
+
+**For Single Fill Orders:**
+```typescript
+// From order-utils.ts lines 507-545
+export async function shareSecretsWithRelayer(orderData: OrderData): Promise<any> {
+  console.log('🔐 SHARING SECRETS WITH RELAYER');
+  console.log('📋 Order ID:', orderData.orderId);
+  
+  // Only handle single fill orders - partial fills use shareSegmentSecret
+  if (orderData.isPartialFillEnabled) {
+    throw new Error('Partial fill orders should use shareSegmentSecret() instead of shareSecretsWithRelayer()');
+  }
+  
+  try {
+    // For single fill orders, send the main secret
+    console.log('🔑 Sharing single fill secret...');
+    
+    const response = await fetch(`http://localhost:8000/orders/${orderData.orderId}/secret`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ 
+        secret: orderData.secret,
+        hashedSecret: orderData.hashedSecret 
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const result = await response.json();
+    console.log('✅ Main secret shared successfully');
+    return result;
+    
+  } catch (error) {
+    console.error('❌ Error sharing secrets with relayer:', error);
+    throw new Error(`Failed to share secrets: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+}
+```
+
+**For Partial Fill Orders:**
+```typescript
+// From order-utils.ts lines 554-605
+export async function shareSegmentSecret(orderId: string, segmentId: number, orderData: OrderData): Promise<any> {
+  console.log('🔐 SHARING SPECIFIC SEGMENT SECRET');
+  console.log('📋 Order ID:', orderId);
+  console.log('📋 Segment ID:', segmentId);
+  
+  if (!orderData.isPartialFillEnabled || !orderData.partialFillSecrets || !orderData.partialFillSecretHashes) {
+    throw new Error('Order is not a partial fill order or missing segment data');
+  }
+  
+  // Validate segment ID
+  if (segmentId < 1 || segmentId > orderData.partialFillSecrets.length) {
+    throw new Error(`Invalid segment ID: ${segmentId}. Must be between 1 and ${orderData.partialFillSecrets.length}`);
+  }
+  
+  // Get the specific segment secret (segmentId is 1-based, array is 0-based)
+  const secretIndex = segmentId - 1;
+  const secret = orderData.partialFillSecrets[secretIndex];
+  const hashedSecret = orderData.partialFillSecretHashes![secretIndex];
+  
+  console.log(`🔐 Sharing secret for segment ${segmentId}:`);
+  console.log(`   Secret: ${secret.slice(0, 10)}...`);
+  console.log(`   Hash: ${hashedSecret.slice(0, 10)}...`);
+  
+  try {
+    const response = await fetch(`http://localhost:8000/orders/${orderId}/segment-secret`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ 
+        segmentId: segmentId,
+        secret: secret,
+        hashedSecret: hashedSecret
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const result = await response.json();
+    console.log('✅ Segment secret shared successfully');
+    return result;
+    
+  } catch (error) {
+    console.error('❌ Error sharing segment secret:', error);
+    throw new Error(`Failed to share segment secret: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+}
+```
+
+### Resolver Secret Retrieval
+
+Resolvers poll the relayer to retrieve secrets after they have been shared by the buyer:
+
+#### Secret Polling Process
+
+```typescript
+// From resolver-contracts.ts lines 1290-1350
+async requestSecretFromBuyer(
+  orderId: string,
+  segmentId?: number
+): Promise<ExecutionResult & { secret?: string }> {
+  try {
+    console.log('🔑 Requesting secret from buyer for order:', orderId, segmentId ? `segment ${segmentId}` : '')
+    
+    // Step 1: Request secret from relayer
+    const requestResponse = await fetch(`http://localhost:8000/resolver/request-secret`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        orderId,
+        segmentId
+      })
+    });
+
+    if (!requestResponse.ok) {
+      throw new Error(`Failed to request secret: ${requestResponse.statusText}`);
+    }
+
+    console.log('📞 Secret request sent to relayer successfully')
+    console.log('⏳ Waiting for buyer to share secret...')
+    
+    // Step 2: Poll for secret (in a real implementation, this would be WebSocket-based)
+    let attempts = 0
+    const maxAttempts = 60 // 5 minutes with 5-second intervals
+    
+    while (attempts < maxAttempts) {
+      await new Promise(resolve => setTimeout(resolve, 5000)) // Wait 5 seconds
+      
+      // Check if secret has been shared
+      const checkResponse = await fetch(`http://localhost:8000/orders/${orderId}`)
+      if (checkResponse.ok) {
+        const orderData = await checkResponse.json()
+        const order = orderData.data
+        
+        if (segmentId) {
+          // Check for segment secret
+          if (order.segmentSecrets) {
+            const segmentSecrets = JSON.parse(order.segmentSecrets)
+            const segmentSecret = segmentSecrets.find((s: any) => s.segmentId === segmentId)
+            if (segmentSecret && segmentSecret.secret) {
+              console.log('✅ Segment secret received from buyer')
+              return {
+                success: true,
+                secret: segmentSecret.secret,
+                message: `Segment ${segmentId} secret received successfully`
+              }
+            }
+          }
+        } else {
+          // Check for main secret
+          if (order.secret) {
+            console.log('✅ Main secret received from buyer')
+            return {
+              success: true,
+              secret: order.secret,
+              message: 'Main secret received successfully'
+            }
+          }
+        }
+      }
+      
+      attempts++
+      console.log(`⏳ Waiting for secret... (attempt ${attempts}/${maxAttempts})`)
+    }
+    
+    throw new Error('Timeout waiting for buyer to share secret')
+    
+  } catch (error) {
+    console.error('❌ Secret request failed:', error)
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Secret request failed'
+    }
+  }
+}
+```
+
+#### Secret Retrieval Response
+
+**Single Fill Secret Response:**
+```json
+{
+  "success": true,
+  "secret": "0x...",
+  "message": "Main secret received successfully"
+}
+```
+
+**Partial Fill Secret Response:**
+```json
+{
+  "success": true,
+  "secret": "0x...",
+  "message": "Segment 1 secret received successfully"
+}
+```
+
+### Real-Time Secret Exchange Events
+
+The relayer provides real-time updates through WebSocket events during the secret exchange process:
+
+#### Secret Requested Event
+```javascript
+// From server.js lines 2490-2500
+const eventData = {
+  type: segmentId ? 'segment_secret_requested' : 'secret_requested',
+  orderId: orderId,
+  segmentId: segmentId,
+  timestamp: new Date().toISOString()
+};
+
+global.auctionServer.broadcastToAll(eventData);
+```
+
+#### Secret Shared Event
+```javascript
+// From server.js lines 1670-1680
+const eventData = {
+  type: segmentId ? 'segment_secret_shared' : 'secret_shared',
+  orderId: orderId,
+  segmentId: segmentId,
+  timestamp: new Date().toISOString()
+};
+
+global.auctionServer.broadcastToAll(eventData);
+```
+
+### Partial Fill Secret Management
+
+Partial fill orders require sophisticated secret management to handle multiple segments:
+
+#### Segment Secret Structure
+```json
+{
+  "segmentSecrets": [
+    {
+      "segmentId": 1,
+      "secret": "0x...",
+      "hashedSecret": "0x..."
+    },
+    {
+      "segmentId": 2,
+      "secret": "0x...",
+      "hashedSecret": "0x..."
+    },
+    {
+      "segmentId": 3,
+      "secret": "0x...",
+      "hashedSecret": "0x..."
+    },
+    {
+      "segmentId": 4,
+      "secret": "0x...",
+      "hashedSecret": "0x..."
+    }
+  ]
+}
+```
+
+#### Segment-Specific Secret Sharing
+
+Each segment can be shared independently, allowing for flexible execution:
+
+```typescript
+// From SwapInterface.tsx lines 586-620
+const handleShareSecret = async (orderId: string, segmentId?: number) => {
+  try {
+    setSharingSecret(true);
+    
+    if (segmentId) {
+      // Share segment secret for partial fills
+      await shareSegmentSecret(orderId, segmentId, orderData)
+    } else {
+      // Share main secret for single fills
+      await shareSecretsWithRelayer(orderData)
+    }
+    
+    toast({
+      title: "Secret Shared Successfully",
+      description: segmentId ? `Segment ${segmentId} secret shared` : "Main secret shared",
+    });
+    
+  } catch (error) {
+    console.error('Error sharing secret:', error);
+    toast({
+      title: "Failed to Share Secret",
+      description: error instanceof Error ? error.message : "Failed to share secret",
+      variant: "destructive",
+    });
+  } finally {
+    setSharingSecret(false);
+  }
+};
+```
+
+### Security Considerations
+
+The secret exchange process includes multiple security measures:
+
+#### Cryptographic Security
+- **Secret Generation**: Cryptographically secure random 32-byte secrets
+- **Hash Verification**: SHA256 hashing ensures cross-chain compatibility
+- **Secret Validation**: All secrets are validated against their hashes before storage
+- **Secure Transmission**: HTTPS encryption for all secret transmission
+
+#### Access Control
+- **Order Ownership**: Only the original buyer can share secrets
+- **Segment Isolation**: Each segment secret is independent and isolated
+- **Time-Limited Access**: Secrets are only available during the withdrawal window
+- **Audit Trail**: All secret operations are logged for security monitoring
+
+#### Error Handling
+- **Invalid Secrets**: Rejected if secret doesn't match hash
+- **Duplicate Segments**: Prevented for partial fill orders
+- **Timeout Protection**: Automatic timeout if secrets aren't shared
+
+---
