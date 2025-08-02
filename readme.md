@@ -797,3 +797,475 @@ console.log(`📈 Effective rate: ${effectiveRate.toFixed(2)}`);
 - **Real-time Progress**: Users can track completion status of individual segments
 
 ---
+
+## Escrow Creations
+
+### Fusion+ Swaps
+
+Fusion+ Swaps escrow creation represents the critical phase where atomic swap execution is initiated through escrow contracts. This section details the comprehensive flow from auction winner selection to smart contract deployment and security deposit management.
+
+#### Winner Selection and Information Transmission
+
+When a resolver wins the Dutch auction, the relayer transmits critical information to enable escrow creation:
+
+**Data Transmitted to Winner:**
+```json
+{
+  "orderId": "0x...",
+  "hashedSecret": "0x...",           // Cryptographic hash for escrow creation
+  "buyerAddress": "0x...",           // Buyer's wallet address
+  "srcChainId": 11155111,            // Source chain ID (Sepolia)
+  "dstChainId": "stellar-testnet",   // Destination chain ID
+  "srcToken": "ETH",                 // Source token symbol
+  "dstToken": "XLM",                 // Destination token symbol
+  "srcAmount": "0.1",                // Source amount
+  "dstAmount": "100",                // Destination amount
+  "finalPrice": "3950",              // Final auction price
+  "marketPrice": "3900",             // Market price at auction start
+  "slippage": "0.02",                // Slippage tolerance
+  "auctionType": "single",           // Auction type (single/segmented)
+  "winner": "resolver_address",      // Winner's address
+  "escrowCreationDeadline": "..."    // Time limit for escrow creation
+}
+```
+
+#### Multi-Stage Time Lock Implementation
+
+StellarFusion implements a sophisticated four-tier time lock system that ensures secure atomic execution:
+
+**Time Lock Parameters:**
+- **Withdrawal Start**: 1 minute after escrow creation (private withdrawal window begins)
+- **Public Withdrawal Start**: 5 minutes after escrow creation (public withdrawal window begins)
+- **Cancellation Start**: 10 minutes after escrow creation (private cancellation window begins)
+- **Public Cancellation Start**: 15 minutes after escrow creation (public cancellation window begins)
+
+```solidity
+// From EscrowFactory.sol lines 103-130
+function createSrcEscrow(
+    bytes32 hashedSecret,
+    address recipient,
+    address buyer,
+    uint256 tokenAmount,
+    uint256 withdrawalStart,        // 1 minute after creation
+    uint256 publicWithdrawalStart,  // 5 minutes after creation
+    uint256 cancellationStart,      // 10 minutes after creation
+    uint256 publicCancellationStart, // 15 minutes after creation
+    uint256 partIndex,
+    uint16 totalParts
+) external payable nonReentrant {
+    // Validate time window progression
+    require(
+        publicWithdrawalStart > withdrawalStart &&
+        cancellationStart > publicWithdrawalStart &&
+        publicCancellationStart > cancellationStart,
+        "Invalid time windows"
+    );
+}
+```
+
+#### Security Deposit Management
+
+Each escrow creation requires a security deposit to ensure resolver commitment:
+
+**Security Deposit Requirements:**
+- **Amount**: 0.001 ETH per escrow contract
+- **Purpose**: Ensures resolver commitment
+- **Refund**: Returned to resolver upon successful withdrawal
+- **Forfeiture**: Lost if resolver fails to complete the swap
+
+```solidity
+// From EscrowFactory.sol lines 50-55
+contract HashLockedEscrowFactory is ReentrancyGuard {
+    uint256 public constant DEPOSIT_AMOUNT = 0.001 ether;
+    
+    function createSrcEscrow(...) external payable nonReentrant {
+        require(msg.value == DEPOSIT_AMOUNT, "Incorrect ETH deposit");
+        // ... rest of function
+    }
+}
+```
+
+#### Cross-Chain Source Escrow Creation
+
+The winner creates the source escrow on the source chain (which could be Ethereum, Stellar, or any supported chain) through the appropriate factory contract:
+
+**Ethereum Source Escrow Creation:**
+```solidity
+// From EscrowFactory.sol lines 103-170
+function createSrcEscrow(
+    bytes32 hashedSecret,
+    address recipient,
+    address buyer,
+    uint256 tokenAmount,
+    uint256 withdrawalStart,
+    uint256 publicWithdrawalStart,
+    uint256 cancellationStart,
+    uint256 publicCancellationStart,
+    uint256 partIndex,
+    uint16 totalParts
+) external payable nonReentrant {
+    require(msg.value == DEPOSIT_AMOUNT, "Incorrect ETH deposit");
+    require(tokenAmount > 0, "Token amount must be > 0");
+    require(recipient != address(0), "Invalid recipient");
+    require(buyer != address(0), "Invalid buyer");
+    
+    // Validate time window progression
+    require(
+        publicWithdrawalStart > withdrawalStart &&
+        cancellationStart > publicWithdrawalStart &&
+        publicCancellationStart > cancellationStart,
+        "Invalid time windows"
+    );
+
+    // Create SourceEscrow contract
+    SourceEscrow escrow = new SourceEscrow{value: msg.value}(
+        buyer,  // Creator
+        recipient,
+        hashedSecret,
+        WETH,
+        tokenAmount,
+        withdrawalStart,
+        publicWithdrawalStart,
+        cancellationStart,
+        publicCancellationStart,
+        partIndex,
+        totalParts
+    );
+
+    address escrowAddress = address(escrow);
+    userEscrows[buyer].push(escrowAddress);
+    isEscrowContract[escrowAddress] = true;
+
+    // Transfer tokens from buyer to escrow
+    IERC20(WETH).transferFrom(buyer, escrowAddress, tokenAmount);
+
+    emit SrcEscrowCreated(
+        buyer,
+        recipient,
+        escrowAddress,
+        hashedSecret,
+        tokenAmount,
+        withdrawalStart,
+        publicWithdrawalStart,
+        cancellationStart,
+        publicCancellationStart
+    );
+}
+```
+
+**Stellar Source Escrow Creation:**
+```rust
+// From limit-order-protocol/src/lib.rs lines 100-180
+pub fn fill_order(
+    env: Env,
+    order_hash: BytesN<32>,
+    maker: Address,
+    recipient: Address,
+    token_amount: i128,
+    hashed_secret: BytesN<32>,
+    withdrawal_start: u64,
+    public_withdrawal_start: u64,
+    part_index: u64,
+    total_parts: u32,
+) -> Address {
+    // Validate inputs
+    if total_parts == 0 {
+        panic!("Total parts must be > 0");
+    }
+    if part_index >= total_parts as u64 {
+        panic!("Invalid part index");
+    }
+    if token_amount <= 0 {
+        panic!("Token amount must be > 0");
+    }
+
+    // Check if this part is already filled
+    let part_filled: bool = env.storage()
+        .persistent()
+        .get(&DataKey::PartsFilled(order_hash.clone(), part_index))
+        .unwrap_or(false);
+    if part_filled {
+        panic!("Part already filled");
+    }
+
+    // Check allowance - LOP must be approved to spend maker's tokens
+    let current_allowance = Self::allowance(env.clone(), maker.clone(), env.current_contract_address());
+    if current_allowance < token_amount {
+        panic!("Insufficient allowance");
+    }
+    
+    // Reduce allowance
+    let new_allowance = current_allowance - token_amount;
+    env.storage().persistent().set(
+        &DataKey::TokenAllowance(maker.clone(), env.current_contract_address()),
+        &new_allowance
+    );
+
+    // Get factory address and create escrow
+    let factory_address: Address = env.storage().instance().get(&DataKey::EscrowFactory).unwrap();
+    let factory_client = EscrowFactoryTraitClient::new(&env, &factory_address);
+    
+    // Create escrow using factory client
+    let escrow_address = factory_client.create_src_escrow_partial(
+        &env.current_contract_address(), // creator (LOP)
+        &hashed_secret,
+        &recipient,
+        &maker,        // buyer
+        &token_amount,
+        &withdrawal_start,
+        &public_withdrawal_start,
+        &(withdrawal_start + 86400), // cancellation_start (24 hours after withdrawal)
+        &part_index,
+        &total_parts,
+    );
+
+    // Track the filled order
+    let filled_order = FilledOrder {
+        order_hash: order_hash.clone(),
+        maker: maker.clone(),
+        recipient: recipient.clone(),
+        escrow_address: escrow_address.clone(),
+        part_index,
+        total_parts,
+        is_active: true,
+    };
+
+    // Store order data
+    let mut filled_orders: Vec<FilledOrder> = env.storage()
+        .persistent()
+        .get(&DataKey::FilledOrders(order_hash.clone()))
+        .unwrap_or(Vec::new(&env));
+    filled_orders.push_back(filled_order);
+    env.storage().persistent().set(&DataKey::FilledOrders(order_hash.clone()), &filled_orders);
+
+    // Mark part as filled
+    env.storage().persistent().set(&DataKey::PartsFilled(order_hash.clone(), part_index), &true);
+
+    escrow_address
+}
+```
+
+#### Cross-Chain Destination Escrow Creation
+
+The winner creates the destination escrow on the destination chain through the appropriate factory contract:
+
+**Ethereum Destination Escrow Creation:**
+```solidity
+// From EscrowFactory.sol lines 175-220
+function createDstEscrow(
+    bytes32 hashedSecret,
+    address recipient,
+    uint256 tokenAmount,
+    uint256 withdrawalStart,
+    uint256 publicWithdrawalStart,
+    uint256 cancellationStart,
+    uint256 partIndex,
+    uint16 totalParts
+) external payable nonReentrant {
+    require(msg.value == DEPOSIT_AMOUNT, "Incorrect ETH deposit");
+    require(tokenAmount > 0, "Token amount must be > 0");
+    require(recipient != address(0), "Invalid recipient");
+    
+    // Validate time windows
+    require(
+        publicWithdrawalStart > withdrawalStart &&
+        cancellationStart > publicWithdrawalStart,
+        "Invalid time windows"
+    );
+
+    // Create DestinationEscrow contract
+    DestinationEscrow escrow = new DestinationEscrow{value: msg.value}(
+        msg.sender,
+        recipient,
+        hashedSecret,
+        WETH,
+        tokenAmount,
+        withdrawalStart,
+        publicWithdrawalStart,
+        cancellationStart,
+        partIndex,
+        totalParts
+    );
+
+    address escrowAddress = address(escrow);
+    userEscrows[msg.sender].push(escrowAddress);
+    isEscrowContract[escrowAddress] = true;
+
+    IERC20(WETH).transferFrom(msg.sender, escrowAddress, tokenAmount);
+
+    emit DstEscrowCreated(
+        msg.sender,
+        recipient,
+        escrowAddress,
+        hashedSecret,
+        tokenAmount,
+        withdrawalStart,
+        publicWithdrawalStart,
+        cancellationStart
+    );
+}
+```
+
+**Stellar Destination Escrow Creation:**
+```rust
+// From resolver/src/lib.rs lines 304-350
+pub fn create_destination_escrow(
+    env: Env,
+    caller: Address,
+    hashed_secret: BytesN<32>,
+    recipient: Address,
+    amount: i128,
+    withdrawal_start: u64,
+    public_withdrawal_start: u64,
+    cancellation_start: u64,
+    part_index: u64,
+    total_parts: u32,
+) -> Address {
+    // Only owner can create destination escrows
+    let owner: Address = env.storage().instance().get(&DataKey::Owner).unwrap();
+    if caller != owner {
+        panic!("Only owner can create destination escrows");
+    }
+    caller.require_auth();
+
+    // Get factory address
+    let factory_address: Address = env.storage()
+        .instance()
+        .get(&DataKey::EscrowFactory)
+        .unwrap();
+
+    // Create destination escrow through factory
+    let factory_client = EscrowFactoryTraitClient::new(&env, &factory_address);
+    let escrow_address = factory_client.create_dst_escrow_partial(
+        &caller, // creator (resolver)
+        &hashed_secret,
+        &recipient,
+        &amount,
+        &withdrawal_start,
+        &public_withdrawal_start,
+        &cancellation_start,
+        &part_index,
+        &total_parts,
+    );
+
+    log!(&env, "DestinationEscrowCreated: escrowAddress={}, hashedSecret={}, recipient={}, amount={}, partIndex={}", 
+         escrow_address, hashed_secret, recipient, amount, part_index);
+
+    escrow_address
+}
+```
+
+**Cross-Chain Escrow Creation Flow:**
+1. **Source Chain**: Winner creates source escrow on the chain where the source tokens are located
+2. **Destination Chain**: Winner creates destination escrow on the chain where destination tokens will be received
+3. **Synchronization**: Both escrows use identical hashedSecret and time lock parameters
+4. **Atomic Execution**: Either both escrows complete successfully or both can be cancelled
+
+#### Cryptographic Security Measures
+
+Stellar Fusion implements multiple layers of cryptographic security:
+
+**Hash Lock Implementation:**
+- **Secret Generation**: Cryptographically secure random 32-byte secret
+- **Hash Calculation**: SHA256 hash of secret for cross-chain compatibility
+- **Hash Verification**: Both Ethereum and Stellar use SHA256 for consistency
+
+```solidity
+// From EscrowFactory.sol lines 280-290
+function withdraw(bytes calldata secret) external nonReentrant {
+    // Use SHA256 instead of keccak256 for Stellar compatibility
+    require(sha256(secret) == hashedSecret, "Invalid secret");
+    
+    fundsWithdrawn = true;
+    // ... withdrawal logic
+}
+```
+
+**Reentrancy Protection:**
+- **NonReentrant Modifier**: Prevents reentrancy attacks on all critical functions
+- **State Changes**: State variables are updated before external calls
+- **Checks-Effects-Interactions Pattern**: Strict adherence to security patterns
+
+```solidity
+// From EscrowFactory.sol lines 103-105
+function createSrcEscrow(...) external payable nonReentrant {
+    require(msg.value == DEPOSIT_AMOUNT, "Incorrect ETH deposit");
+    // ... validation and state changes before external calls
+}
+```
+
+#### Escrow State Management
+
+The system maintains comprehensive state tracking for each escrow:
+
+**Source Escrow State Variables:**
+```solidity
+// From EscrowFactory.sol lines 230-250
+contract SourceEscrow is ReentrancyGuard {
+    address public immutable creator;
+    address public immutable recipient;
+    bytes32 public immutable hashedSecret;
+    address public immutable token;
+    uint256 public immutable amount;
+    uint256 public immutable securityDeposit;
+    
+    // Time lock parameters
+    uint256 public immutable withdrawalStart;
+    uint256 public immutable publicWithdrawalStart;
+    uint256 public immutable cancellationStart;
+    uint256 public immutable publicCancellationStart;
+    
+    bool public fundsWithdrawn;
+    bool public cancelled;
+}
+```
+
+**State Transition Rules:**
+- **Active State**: Escrow is created and awaiting withdrawal
+- **Withdrawn State**: Funds have been successfully withdrawn
+- **Cancelled State**: Escrow has been cancelled by creator
+- **Rescue State**: Emergency withdrawal after extended delays
+
+#### Event Emission and Monitoring
+
+Comprehensive event system enables real-time monitoring:
+
+**Key Events:**
+```solidity
+// From EscrowFactory.sol lines 60-80
+event SrcEscrowCreated(
+    address indexed creator,
+    address indexed recipient,
+    address escrowAddress,
+    bytes32 indexed hashedSecret,
+    uint256 tokenAmount,
+    uint256 withdrawalStart,
+    uint256 publicWithdrawalStart,
+    uint256 cancellationStart,
+    uint256 publicCancellationStart
+);
+
+event Withdrawal(address indexed caller, bytes secret);
+event FundsTransferred(address indexed to, uint256 amount);
+event SecurityDepositTransferred(address indexed to, uint256 amount);
+event Cancelled(address indexed initiator, uint256 amount);
+event Rescued(address indexed initiator, uint256 amount);
+```
+
+#### Cross-Chain Coordination
+
+The escrow creation process ensures perfect coordination between chains:
+
+**Coordination Requirements:**
+- **Synchronized Time Locks**: Both chains use identical time lock parameters
+- **Hash Lock Consistency**: Same hashedSecret used on both chains
+- **Amount Verification**: Token amounts match across both escrows
+- **Address Validation**: Recipient addresses are verified on both chains
+
+**Error Handling:**
+- **Invalid Time Windows**: Rejected if time lock progression is invalid
+- **Insufficient Deposits**: Rejected if security deposit is incorrect
+- **Token Approval**: Rejected if WETH approval is insufficient
+- **Address Validation**: Rejected if addresses are invalid or zero
+
+---
