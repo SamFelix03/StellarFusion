@@ -42,15 +42,6 @@ export interface WithdrawalParams {
   segmentIndex?: number
 }
 
-export interface RelayerVerificationParams {
-  orderId: string
-  sourceEscrowAddress: string
-  destinationEscrowAddress: string
-  sourceChain: string
-  destinationChain: string
-  withdrawalStart: number
-}
-
 export interface ResolverOrderExecution {
   orderId: string
   sourceChain: string
@@ -425,28 +416,44 @@ export class ResolverContractManager {
       const actualTotalParts = params.totalParts || 1
       const functionName = (actualPartIndex > 0 || actualTotalParts > 1) ? 'create_src_escrow_partial' : 'create_src_escrow'
       
+      console.log("🔍 Debug - Parameters being passed:")
+      console.log(`  creator: ${params.resolverAddress}`)
+      console.log(`  hashed_secret: ${params.hashedSecret}`)
+      console.log(`  recipient: ${params.resolverAddress}`)
+      console.log(`  buyer: ${params.buyerAddress}`)
+      console.log(`  token_amount: ${amountInStroops} (${params.srcAmount} XLM)`)
+      console.log(`  withdrawal_start: ${timeWindows.withdrawalStart}`)
+      console.log(`  public_withdrawal_start: ${timeWindows.publicWithdrawalStart}`)
+      console.log(`  cancellation_start: ${timeWindows.cancellationStart}`)
+      console.log(`  public_cancellation_start: ${timeWindows.publicCancellationStart}`)
+      console.log(`  part_index: ${actualPartIndex}`)
+      console.log(`  total_parts: ${actualTotalParts}`)
+      
+      // Use CLI approach for better compatibility (matches dynamic-swap.ts)
+      const { execSync } = require('child_process')
+      
       let command: string
       if (functionName === 'create_src_escrow_partial') {
+        // Partial fill function with all parameters (note: no public_cancellation_start as we reduced params)
         command = `soroban contract invoke --id ${config.lopAddress} --source stellar-resolver --network testnet -- ${functionName} --creator ${params.resolverAddress} --hashed_secret ${params.hashedSecret.slice(2)} --recipient ${params.resolverAddress} --buyer ${params.buyerAddress} --token_amount ${amountInStroops} --withdrawal_start ${timeWindows.withdrawalStart} --public_withdrawal_start ${timeWindows.publicWithdrawalStart} --cancellation_start ${timeWindows.cancellationStart} --part_index ${actualPartIndex} --total_parts ${actualTotalParts}`
       } else {
+        // Regular function without partial fill parameters
         command = `soroban contract invoke --id ${config.lopAddress} --source stellar-resolver --network testnet -- ${functionName} --creator ${params.resolverAddress} --hashed_secret ${params.hashedSecret.slice(2)} --recipient ${params.resolverAddress} --buyer ${params.buyerAddress} --token_amount ${amountInStroops} --withdrawal_start ${timeWindows.withdrawalStart} --public_withdrawal_start ${timeWindows.publicWithdrawalStart} --cancellation_start ${timeWindows.cancellationStart} --public_cancellation_start ${timeWindows.publicCancellationStart}`
       }
       
       console.log('📤 Executing CLI command...')
       console.log(`Command: ${command}`)
       
-      // Note: In browser environment, we simulate this
-      // In real implementation, this would be executed server-side or via WebAssembly
-      const mockResult = `"STELLAR_ESCROW_${Math.random().toString(16).substr(2, 20)}"`
+      const result = execSync(command, { encoding: 'utf8' })
       
       console.log('✅ Stellar source escrow created successfully!')
-      console.log(`📋 Result: ${mockResult.trim()}`)
+      console.log(`📋 Result: ${result.trim()}`)
       
       return {
         success: true,
-        escrowAddress: mockResult.trim().replace(/"/g, ''),
-        transactionHash: 'STELLAR_CLI_SUCCESS',
-        message: 'Stellar source escrow created successfully',
+        escrowAddress: result.trim().replace(/"/g, ''),
+        transactionHash: 'CLI_SUCCESS',
+        message: 'Source escrow created successfully',
         details: {
           orderId: params.orderId,
           buyerAddress: params.buyerAddress,
@@ -602,6 +609,20 @@ export class ResolverContractManager {
       const actualTotalParts = totalParts || 1
       const functionName = (actualPartIndex > 0 || actualTotalParts > 1) ? 'create_dst_escrow_partial' : 'create_dst_escrow'
       
+      console.log("🔍 Debug - Parameters being passed:")
+      console.log(`  creator: stellar-resolver`)
+      console.log(`  hashed_secret: ${hashedSecret}`)
+      console.log(`  recipient: ${buyerAddress}`)
+      console.log(`  token_amount: ${amountInStroops} (${dstAmount} XLM)`)
+      console.log(`  withdrawal_start: ${timeWindows.withdrawalStart}`)
+      console.log(`  public_withdrawal_start: ${timeWindows.publicWithdrawalStart}`)
+      console.log(`  cancellation_start: ${timeWindows.cancellationStart}`)
+      console.log(`  part_index: ${actualPartIndex}`)
+      console.log(`  total_parts: ${actualTotalParts}`)
+      
+      // Use CLI approach for better compatibility (matches dynamic-swap.ts)
+      const { execSync } = require('child_process')
+      
       let command: string
       if (functionName === 'create_dst_escrow_partial') {
         command = `soroban contract invoke --id ${config.factoryAddress} --source stellar-resolver --network testnet -- ${functionName} --creator stellar-resolver --hashed_secret ${hashedSecret.slice(2)} --recipient ${buyerAddress} --token_amount ${amountInStroops} --withdrawal_start ${timeWindows.withdrawalStart} --public_withdrawal_start ${timeWindows.publicWithdrawalStart} --cancellation_start ${timeWindows.cancellationStart} --part_index ${actualPartIndex} --total_parts ${actualTotalParts}`
@@ -612,17 +633,16 @@ export class ResolverContractManager {
       console.log('📤 Executing CLI command...')
       console.log(`Command: ${command}`)
       
-      // Simulate CLI execution
-      const mockResult = `"STELLAR_DST_ESCROW_${Math.random().toString(16).substr(2, 20)}"`
+      const result = execSync(command, { encoding: 'utf8' })
       
       console.log('✅ Stellar destination escrow created successfully!')
-      console.log(`📋 Result: ${mockResult.trim()}`)
+      console.log(`📋 Result: ${result.trim()}`)
       
       return {
         success: true,
-        escrowAddress: mockResult.trim().replace(/"/g, ''),
-        transactionHash: 'STELLAR_CLI_SUCCESS',
-        message: 'Stellar destination escrow created successfully',
+        escrowAddress: result.trim().replace(/"/g, ''),
+        transactionHash: 'CLI_SUCCESS',
+        message: 'Destination escrow created successfully',
         details: {
           buyerAddress,
           amount: dstAmount,
@@ -860,17 +880,32 @@ export class ResolverContractManager {
       }
       
       // Determine method name based on escrow type and partial fill
-      let methodName = params.isSource ? 'withdraw_src_escrow' : 'withdraw_dst_escrow'
+      const isSource = params.isSource
+      let methodName = isSource ? 'withdraw_src_escrow' : 'withdraw_dst_escrow'
       
       // If partial fill, use the proof-based method
       if (params.isPartialFill && params.merkleProof && params.merkleProof.length > 0) {
-        methodName = params.isSource ? 'withdraw_src_escrow_with_proof' : 'withdraw_dst_escrow_with_proof'
+        methodName = isSource ? 'withdraw_src_escrow_with_proof' : 'withdraw_dst_escrow_with_proof'
       }
+      
+      console.log("🔍 Debug - Parameters being passed:")
+      console.log(`  caller: stellar-resolver`)
+      console.log(`  escrow_address: ${params.escrowAddress}`)
+      console.log(`  secret: ${params.secret}`)
+      console.log(`  is_source: ${isSource}`)
+      console.log(`  is_partial_fill: ${params.isPartialFill}`)
+      if (params.merkleProof && params.merkleProof.length > 0) {
+        console.log(`  merkle_proof_length: ${params.merkleProof.length}`)
+      }
+      
+      // Use CLI approach for better compatibility (matches dynamic-swap.ts)
+      const { execSync } = require('child_process')
       
       let command: string
       if (params.isPartialFill && params.merkleProof && params.merkleProof.length > 0) {
         // Convert merkle proof to CLI format - Soroban CLI expects JSON array format
-        const proofArray = params.merkleProof.map(p => `"${p.slice(2)}"`)
+        // Format: --merkle_proof '[ "hex1", "hex2" ]' (with quotes around each element)
+        const proofArray = params.merkleProof.map(p => `"${p.slice(2)}"`) // Remove 0x prefix and add quotes
         const proofStr = `[ ${proofArray.join(', ')} ]`
         command = `soroban contract invoke --id ${config.factoryAddress} --source stellar-resolver --network testnet -- ${methodName} --caller stellar-resolver --escrow_address ${params.escrowAddress} --secret ${params.secret.slice(2)} --merkle_proof '${proofStr}'`
         console.log(`🔍 Partial fill withdrawal with merkle proof (${params.merkleProof.length} elements)`)
@@ -883,16 +918,15 @@ export class ResolverContractManager {
       console.log('📤 Executing withdrawal CLI command...')
       console.log(`Command: ${command}`)
       
-      // Simulate CLI execution
-      const mockResult = 'Withdrawal completed successfully'
+      const result = execSync(command, { encoding: 'utf8' })
       
       console.log('✅ Stellar escrow withdrawal completed successfully!')
-      console.log(`📋 Result: ${mockResult.trim()}`)
+      console.log(`📋 Result: ${result.trim()}`)
       
       return {
         success: true,
-        transactionHash: 'STELLAR_CLI_SUCCESS',
-        message: 'Stellar withdrawal completed successfully',
+        transactionHash: 'CLI_SUCCESS',
+        message: 'Withdrawal completed successfully',
         details: {
           escrowAddress: params.escrowAddress,
           isSource: params.isSource,
@@ -1096,23 +1130,10 @@ export class ResolverContractManager {
       onProgressUpdate?.('relayer-verification', 'in-progress')
       console.log('📞 Step 4: Requesting relayer verification...')
       
-      const verificationParams: RelayerVerificationParams = {
-        orderId: orderExecution.orderId,
-        sourceEscrowAddress: sourceResult.escrowAddress!,
-        destinationEscrowAddress: destinationResult.escrowAddress!,
-        sourceChain: orderExecution.sourceChain,
-        destinationChain: orderExecution.destinationChain,
-        withdrawalStart
-      }
-      
-      const verificationResult = await this.requestRelayerVerification(verificationParams)
-      if (!verificationResult.success) {
-        onProgressUpdate?.('relayer-verification', 'failed', { error: verificationResult.error })
-        throw new Error(`Relayer verification failed: ${verificationResult.error}`)
-      }
-      
+      // Note: Verification is now handled within the requestSecretFromBuyer function
+      // The relayer will verify escrows before allowing secret request
       onProgressUpdate?.('relayer-verification', 'completed', {
-        message: 'Relayer verified escrows successfully. Timelock conditions met.'
+        message: 'Relayer verification will be performed during secret request.'
       })
       
       // Step 5: Wait for withdrawal window
@@ -1122,11 +1143,18 @@ export class ResolverContractManager {
         message: 'Withdrawal window is now open. Requesting secret from buyer.'
       })
       
-      // Step 6: Request secret from buyer via relayer
+      // Step 6: Request secret from buyer via relayer (includes verification)
       onProgressUpdate?.('secret-request', 'in-progress')
       console.log('🔑 Step 6: Requesting secret from buyer via relayer...')
       
-      const secretResult = await this.requestSecretFromBuyer(orderExecution.orderId, orderExecution.segmentIndex)
+      const secretResult = await this.requestSecretFromBuyer(
+        orderExecution.orderId,
+        sourceResult.escrowAddress!,
+        destinationResult.escrowAddress!,
+        orderExecution.sourceChain,
+        orderExecution.destinationChain,
+        orderExecution.segmentIndex
+      )
       if (!secretResult.success) {
         onProgressUpdate?.('secret-request', 'failed', { error: secretResult.error })
         throw new Error(`Secret request failed: ${secretResult.error}`)
@@ -1218,64 +1246,21 @@ export class ResolverContractManager {
     }
   }
 
-  // Request relayer verification of escrows and timelock
-  async requestRelayerVerification(
-    params: RelayerVerificationParams
-  ): Promise<ExecutionResult & { verified?: boolean }> {
-    try {
-      console.log('📞 Requesting relayer verification for escrows...')
-      console.log('📋 Verification params:', params)
-      
-      // In a real implementation, this would make an HTTP request to the relayer
-      // For now, we simulate the verification process
-      const relayerEndpoint = 'http://localhost:8080/api/verify-escrows'
-      
-      const verificationRequest = {
-        orderId: params.orderId,
-        sourceEscrow: {
-          address: params.sourceEscrowAddress,
-          chain: params.sourceChain
-        },
-        destinationEscrow: {
-          address: params.destinationEscrowAddress,
-          chain: params.destinationChain
-        },
-        withdrawalStart: params.withdrawalStart,
-        timestamp: Date.now()
-      }
-      
-      // Simulate API call delay
-      await new Promise(resolve => setTimeout(resolve, 2000))
-      
-      // Mock successful verification
-      console.log('✅ Relayer verification completed successfully')
-      console.log('📋 Escrows verified, timelock conditions met')
-      
-      return {
-        success: true,
-        verified: true,
-        message: 'Relayer verified escrows and timelock conditions successfully'
-      }
-      
-    } catch (error) {
-      console.error('❌ Relayer verification failed:', error)
-      return {
-        success: false,
-        verified: false,
-        error: error instanceof Error ? error.message : 'Verification failed'
-      }
-    }
-  }
-
   // Request secret from buyer via relayer
   async requestSecretFromBuyer(
     orderId: string,
+    sourceEscrowAddress: string,
+    destinationEscrowAddress: string,
+    sourceChain: string,
+    destinationChain: string,
     segmentId?: number
   ): Promise<ExecutionResult & { secret?: string }> {
     try {
       console.log('🔑 Requesting secret from buyer for order:', orderId, segmentId ? `segment ${segmentId}` : '')
+      console.log('🔗 Source escrow address:', sourceEscrowAddress, `(${sourceChain})`)
+      console.log('🔗 Destination escrow address:', destinationEscrowAddress, `(${destinationChain})`)
       
-      // Step 1: Request secret from relayer
+      // Step 1: Request secret from relayer with actual escrow addresses and chain information
       const requestResponse = await fetch(`http://localhost:8000/resolver/request-secret`, {
         method: 'POST',
         headers: {
@@ -1283,14 +1268,18 @@ export class ResolverContractManager {
         },
         body: JSON.stringify({
           orderId,
-          segmentId
+          segmentId,
+          sourceEscrowAddress,
+          destinationEscrowAddress,
+          sourceChain,
+          destinationChain
         })
       });
 
       if (!requestResponse.ok) {
         throw new Error(`Failed to request secret: ${requestResponse.statusText}`);
       }
-
+      
       console.log('📞 Secret request sent to relayer successfully')
       console.log('⏳ Waiting for buyer to share secret...')
       
