@@ -55,7 +55,7 @@ interface AuctionDetails {
   orderType: 'normal' | 'partialfill'
   auctionType: 'single' | 'segmented'
   hashedSecret: string
-  buyerAddress: string // Now provided by relayer from the start
+  buyerAddress: string
   
   // Auction participants
   winner?: string | null
@@ -74,6 +74,9 @@ interface AuctionDetails {
   dstToken?: string
   srcAmount?: string
   dstAmount?: string
+  createdAt?: string
+  market_price?: string
+  slippage?: string
   
   // Single auction properties
   currentPrice?: number
@@ -82,10 +85,12 @@ interface AuctionDetails {
   minimumPrice?: number
   sourceAmount?: number
   marketPrice?: number
-  slippage?: number
+  endTime?: number | null
   
   // Segmented auction properties
   segments?: AuctionSegment[]
+  totalWinners?: any[]
+  intervals?: any[]
 }
 
 export default function Component({ onBackToHome }: { onBackToHome?: () => void }) {
@@ -128,32 +133,7 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
     }
   }
 
-  // Fetch complete order details when resolver chooses an order
-  const fetchCompleteOrderDetails = async (orderId: string): Promise<OrderData | null> => {
-    try {
-      console.log('🔍 Fetching complete order details for resolver:', orderId)
-      const orderData = await fetchOrderData(orderId)
-      if (orderData) {
-        console.log('✅ Complete order details fetched:', {
-          orderId: orderData.orderId,
-          buyerAddress: orderData.buyerAddress,
-          srcChainId: orderData.srcChainId,
-          dstChainId: orderData.dstChainId,
-          srcToken: orderData.srcToken,
-          dstToken: orderData.dstToken,
-          srcAmount: orderData.srcAmount,
-          dstAmount: orderData.dstAmount,
-          hashedSecret: orderData.hashedSecret
-        })
-      }
-      return orderData
-    } catch (error) {
-      console.error('❌ Error fetching complete order details:', error)
-      return null
-    }
-  }
-
-  // Fetch order data for all auctions
+  // Fetch order data for all auctions (kept for backup)
   const fetchAllOrderData = async (auctionList: Auction[]) => {
     const newOrderDataMap = new Map<string, OrderData>()
     
@@ -296,23 +276,10 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
 
   const handleAuctionClick = async (auction: Auction) => {
     console.log('🔍 Auction clicked:', auction.orderId, 'Type:', auction.auctionType)
-    console.log('📊 Original auction buyer address:', auction.buyerAddress)
+    console.log('📊 Auction object with database fields:', auction)
     
-    // Fetch complete order data from database
-    const completeOrderData = await fetchCompleteOrderDetails(auction.orderId)
-    if (!completeOrderData) {
-      console.error('❌ Failed to fetch complete order data for auction:', auction.orderId)
-      toast({
-        title: "Error",
-        description: "Failed to fetch order details from database",
-        variant: "destructive"
-      })
-      return
-    }
-    
-    console.log('📊 Complete order data fetched for auction details:', completeOrderData)
-    
-    // Determine token info based on complete order data
+    // The auction object now contains ALL database fields directly
+    // No need to fetch from database separately
     const tokenInfo = getTokenInfo(auction)
     
     const details: AuctionDetails = {
@@ -322,15 +289,16 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
       fromChain: tokenInfo.fromChain,
       toChain: tokenInfo.toChain,
       sourceAmount: parseFloat(tokenInfo.srcAmount) || 0,
-      // Use complete order data from database
-      buyerAddress: completeOrderData.buyerAddress,
-      srcChainId: completeOrderData.srcChainId,
-      dstChainId: completeOrderData.dstChainId,
-      srcToken: completeOrderData.srcToken,
-      dstToken: completeOrderData.dstToken,
-      srcAmount: completeOrderData.srcAmount,
-      dstAmount: completeOrderData.dstAmount,
-      hashedSecret: completeOrderData.hashedSecret || '',
+      // Use database fields directly from auction object
+      buyerAddress: auction.buyerAddress,
+      srcChainId: auction.srcChainId,
+      dstChainId: auction.dstChainId,
+      srcToken: auction.srcToken,
+      dstToken: auction.dstToken,
+      srcAmount: auction.srcAmount,
+      dstAmount: auction.dstAmount,
+      hashedSecret: auction.hashedSecret,
+      status: (auction.status as 'active' | 'completed' | 'expired') || 'active',
       // Include other auction properties
       currentPrice: auction.auctionType === 'single' 
         ? (auction as SingleAuction).currentPrice 
@@ -341,13 +309,11 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
       marketPrice: auction.auctionType === 'single'
         ? (auction as SingleAuction).marketPrice
         : (auction as SegmentedAuction).marketPrice,
-      slippage: auction.auctionType === 'single'
-        ? (auction as SingleAuction).slippage
-        : (auction as SegmentedAuction).slippage
+      slippage: auction.slippage || '0.02'
     }
     
     console.log('📊 Complete auction details:', details)
-    console.log('📊 Buyer address from database:', details.buyerAddress)
+    console.log('📊 Buyer address from auction object:', details.buyerAddress)
     if (details.auctionType === 'segmented') {
       console.log('📊 Segments in details:', (details as SegmentedAuction).segments)
     }
@@ -357,47 +323,100 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
     setIsModalOpen(true)
   }
 
+  // Map database chain IDs to chainsConfig keys
+  const mapChainIdToConfigKey = (chainId: string): string => {
+    switch (chainId) {
+      case "Sepolia Testnet":
+        return "sepolia"
+      case "Stellar Testnet":
+        return "stellar-testnet"
+      default:
+        return chainId
+    }
+  }
+
   const getTokenInfo = (auction: Auction) => {
-    // Get order data from our map
-    const orderData = orderDataMap.get(auction.orderId)
+    console.log('🔍 getTokenInfo called for auction:', auction.orderId)
+    console.log('📊 Auction database fields:', {
+      srcChainId: auction.srcChainId,
+      dstChainId: auction.dstChainId,
+      srcToken: auction.srcToken,
+      dstToken: auction.dstToken,
+      srcAmount: auction.srcAmount,
+      dstAmount: auction.dstAmount
+    })
     
-    if (orderData) {
-      // Use real order data from database
-      console.log('📊 Using real order data from database:', orderData)
-      
-      // Get chain configurations
-      const srcChain = chainsConfig[orderData.srcChainId as keyof typeof chainsConfig]
-      const dstChain = chainsConfig[orderData.dstChainId as keyof typeof chainsConfig]
-      
-      if (srcChain && dstChain) {
-        const srcToken = srcChain.tokens[orderData.srcToken as keyof typeof srcChain.tokens]
-        const dstToken = dstChain.tokens[orderData.dstToken as keyof typeof dstChain.tokens]
-        
-        return {
-          tokenName: dstToken?.name || orderData.dstToken,
-          tokenSymbol: dstToken?.symbol || orderData.dstToken,
-          fromChain: srcChain.name,
-          toChain: dstChain.name,
-          srcAmount: orderData.srcAmount,
-          dstAmount: orderData.dstAmount
-        }
-      } else {
-        console.warn('⚠️ Chain configuration not found for:', orderData.srcChainId, orderData.dstChainId)
+    // Check if we have the required database fields
+    if (!auction.srcChainId || !auction.dstChainId || !auction.srcToken || !auction.dstToken) {
+      console.log('⏳ Auction data not yet loaded, returning fallback info')
+      // Return fallback info instead of throwing error
+      return {
+        tokenName: "Loading...",
+        tokenSymbol: "???",
+        fromChain: "Loading...",
+        toChain: "Loading...",
+        srcAmount: "0",
+        dstAmount: "0"
       }
-    } else {
-      console.warn('⚠️ Order data not found in map for auction:', auction.orderId)
     }
     
-    // Only use fallback if no order data available
-    console.log('⚠️ Using fallback token info for auction:', auction.orderId)
-    const isPartialFill = auction.auctionType === 'segmented'
-    return {
-      tokenName: isPartialFill ? "Stellar Lumens" : "Ethereum",
-      tokenSymbol: isPartialFill ? "XLM" : "ETH",
-      fromChain: isPartialFill ? "Ethereum" : "Stellar",
-      toChain: isPartialFill ? "Stellar" : "Ethereum",
-      srcAmount: "0",
-      dstAmount: "0"
+    console.log('✅ All required database fields present')
+    
+    // Map database chain IDs to chainsConfig keys
+    const srcChainKey = mapChainIdToConfigKey(auction.srcChainId)
+    const dstChainKey = mapChainIdToConfigKey(auction.dstChainId)
+    
+    console.log('🔄 Chain ID mapping:', {
+      originalSrcChainId: auction.srcChainId,
+      mappedSrcChainKey: srcChainKey,
+      originalDstChainId: auction.dstChainId,
+      mappedDstChainKey: dstChainKey
+    })
+    
+    // Get chain configurations
+    const srcChain = chainsConfig[srcChainKey as keyof typeof chainsConfig]
+    const dstChain = chainsConfig[dstChainKey as keyof typeof chainsConfig]
+    
+    console.log('🔧 Chain config lookup:', {
+      srcChainFound: !!srcChain,
+      dstChainFound: !!dstChain,
+      availableKeys: Object.keys(chainsConfig)
+    })
+    
+    if (srcChain && dstChain) {
+      console.log('✅ Both chain configs found')
+      
+      const srcToken = srcChain.tokens[auction.srcToken as keyof typeof srcChain.tokens]
+      const dstToken = dstChain.tokens[auction.dstToken as keyof typeof dstChain.tokens]
+      
+      console.log('🔧 Token lookup:', {
+        srcTokenFound: !!srcToken,
+        dstTokenFound: !!dstToken,
+        srcTokenKey: auction.srcToken,
+        dstTokenKey: auction.dstToken,
+        availableSrcTokens: Object.keys(srcChain.tokens),
+        availableDstTokens: Object.keys(dstChain.tokens)
+      })
+      
+      return {
+        tokenName: dstToken?.name || auction.dstToken,
+        tokenSymbol: dstToken?.symbol || auction.dstToken,
+        fromChain: srcChain.name,
+        toChain: dstChain.name,
+        srcAmount: auction.srcAmount || '0',
+        dstAmount: auction.dstAmount || '0'
+      }
+    } else {
+      console.warn('⚠️ Chain configuration not found for:', srcChainKey, dstChainKey)
+      // Return fallback info instead of throwing error
+      return {
+        tokenName: auction.dstToken || "Unknown",
+        tokenSymbol: auction.dstToken || "???",
+        fromChain: auction.srcChainId || "Unknown",
+        toChain: auction.dstChainId || "Unknown",
+        srcAmount: auction.srcAmount || "0",
+        dstAmount: auction.dstAmount || "0"
+      }
     }
   }
 
@@ -492,13 +511,7 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
     }
 
     try {
-      // Fetch complete order details from database
-      const completeOrderData = await fetchCompleteOrderDetails(pendingConfirmation.orderId)
-      if (!completeOrderData) {
-        throw new Error('Failed to fetch complete order details from database')
-      }
-
-      console.log('📊 Complete order data for resolver:', completeOrderData)
+      console.log('📊 Using database fields directly from auction object:', pendingConfirmation)
 
       if (pendingConfirmation.auctionType === 'single') {
         auctionClientRef.current.confirmAuction(pendingConfirmation.orderId, undefined, userAddress)
@@ -507,14 +520,15 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
         // Open resolver execution modal for normal orders with complete data
         setExecutingAuction({
           ...pendingConfirmation,
-          buyerAddress: completeOrderData.buyerAddress,
-          srcChainId: completeOrderData.srcChainId,
-          dstChainId: completeOrderData.dstChainId,
-          srcToken: completeOrderData.srcToken,
-          dstToken: completeOrderData.dstToken,
-          srcAmount: completeOrderData.srcAmount,
-          dstAmount: completeOrderData.dstAmount,
-          hashedSecret: completeOrderData.hashedSecret
+          // Database fields are already included in the auction object
+          buyerAddress: pendingConfirmation.buyerAddress,
+          srcChainId: pendingConfirmation.srcChainId,
+          dstChainId: pendingConfirmation.dstChainId,
+          srcToken: pendingConfirmation.srcToken,
+          dstToken: pendingConfirmation.dstToken,
+          srcAmount: pendingConfirmation.srcAmount,
+          dstAmount: pendingConfirmation.dstAmount,
+          hashedSecret: pendingConfirmation.hashedSecret
         } as AuctionDetails)
         setIsExecutionModalOpen(true)
       } else if (pendingConfirmation.auctionType === 'segmented') {
@@ -528,14 +542,15 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
         // Open resolver execution modal for partial fill orders with complete data
         setExecutingAuction({
           ...pendingConfirmation,
-          buyerAddress: completeOrderData.buyerAddress,
-          srcChainId: completeOrderData.srcChainId,
-          dstChainId: completeOrderData.dstChainId,
-          srcToken: completeOrderData.srcToken,
-          dstToken: completeOrderData.dstToken,
-          srcAmount: completeOrderData.srcAmount,
-          dstAmount: completeOrderData.dstAmount,
-          hashedSecret: completeOrderData.hashedSecret
+          // Database fields are already included in the auction object
+          buyerAddress: pendingConfirmation.buyerAddress,
+          srcChainId: pendingConfirmation.srcChainId,
+          dstChainId: pendingConfirmation.dstChainId,
+          srcToken: pendingConfirmation.srcToken,
+          dstToken: pendingConfirmation.dstToken,
+          srcAmount: pendingConfirmation.srcAmount,
+          dstAmount: pendingConfirmation.dstAmount,
+          hashedSecret: pendingConfirmation.hashedSecret
         } as AuctionDetails)
         setIsExecutionModalOpen(true)
       }
@@ -658,7 +673,7 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.6 }}
-          className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-10"
+          className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10"
         >
           {[
             {
@@ -666,44 +681,6 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
               value: auctions.filter((a) => getAuctionStatus(a) === "active").length,
               icon: Activity,
               iconColor: "text-emerald-600",
-            },
-            {
-              label: "Total Volume",
-              value: (() => {
-                const totalAmount = auctions.reduce((sum, a) => {
-                  // Get order data from database
-                  const orderData = orderDataMap.get(a.orderId)
-                  if (orderData && orderData.srcAmount) {
-                    return sum + parseFloat(orderData.srcAmount)
-                  }
-                  // Fallback to auction data if database data not available
-                  const tokenInfo = getTokenInfo(a)
-                  const amount = a.auctionType === 'single' 
-                    ? (a as SingleAuction).sourceAmount 
-                    : (a as SegmentedAuction).sourceAmount
-                  return sum + (amount || 0)
-                }, 0)
-                
-                // Get token symbol from first auction with database data
-                let tokenSymbol = 'TOKENS'
-                for (const auction of auctions) {
-                  const orderData = orderDataMap.get(auction.orderId)
-                  if (orderData && orderData.srcToken) {
-                    const srcChain = chainsConfig[orderData.srcChainId as keyof typeof chainsConfig]
-                    if (srcChain) {
-                      const token = srcChain.tokens[orderData.srcToken as keyof typeof srcChain.tokens]
-                      if (token) {
-                        tokenSymbol = token.symbol
-                        break
-                      }
-                    }
-                  }
-                }
-                
-                return `${totalAmount.toFixed(4)} ${tokenSymbol}`
-              })(),
-              icon: DollarSign,
-              iconColor: "text-blue-600",
             },
             {
               label: "Completed",
@@ -769,8 +746,8 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
                     <Network className="w-6 h-6 text-white" />
                   </div>
                   <div>
-                    <h2 className="text-2xl font-bold text-white">Live Dutch Auctions</h2>
-                    <p className="text-white/60">Cross-chain swap opportunities</p>
+                    <h2 className="text-2xl font-bold text-white">Live Orders</h2>
+                    <p className="text-white/60">Participate in the Dutch Auction</p>
                   </div>
                 </div>
                 <motion.div
@@ -992,7 +969,9 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
                   <div>
                     <div className="flex items-center gap-2">
                       <h2 className="text-lg font-bold text-white">{selectedAuction.tokenName}</h2>
-
+                      <Badge className="bg-blue-500/20 text-blue-300 border-blue-500/30 backdrop-blur-sm text-xs">
+                        FUSION SWAP
+                      </Badge>
                     </div>
                     <div className="flex items-center gap-2 text-xs text-white/70 mt-1">
                       <span>{selectedAuction.fromChain}</span>
@@ -1076,8 +1055,8 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
                          <span className="text-white/60">Slippage:</span>
                          <span className="font-semibold text-white">
                            {selectedAuction.auctionType === 'single'
-                             ? `${(((selectedAuction as SingleAuction).slippage || 0.02) * 100).toFixed(2)}%`
-                             : `${(((selectedAuction as SegmentedAuction).slippage || 0.02) * 100).toFixed(2)}%`
+                             ? `${((parseFloat(selectedAuction.slippage || '0.02')) * 100).toFixed(2)}%`
+                             : `${((parseFloat(selectedAuction.slippage || '0.02')) * 100).toFixed(2)}%`
                            }
                          </span>
                        </div>

@@ -79,8 +79,8 @@ const getTokensFromConfig = (): Token[] => {
       symbol: symbol,
       name: token.name,
       icon: symbol === "ETH" ? "🔷" : symbol === "WETH" ? "🔷" : symbol === "USDC" ? "💙" : "💚",
-      balance: 0,
-      usdValue: 0,
+    balance: 0,
+    usdValue: 0,
       chain: "Sepolia Testnet",
       address: token.address,
       coingeckoId: symbol === "ETH" || symbol === "WETH" ? "ethereum" : undefined
@@ -94,8 +94,8 @@ const getTokensFromConfig = (): Token[] => {
       symbol: symbol,
       name: token.name,
       icon: symbol === "XLM" ? "⭐" : symbol === "USDC" ? "💙" : "💚",
-      balance: 0,
-      usdValue: 0,
+    balance: 0,
+    usdValue: 0,
       chain: "Stellar Testnet",
       address: token.address,
       coingeckoId: symbol === "XLM" ? "stellar" : undefined
@@ -139,7 +139,7 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
   const [priceData, setPriceData] = useState<PriceData>({})
   const [currentUsdValue, setCurrentUsdValue] = useState(0)
   const [tokensWithBalances, setTokensWithBalances] = useState<Token[]>(mockTokens)
-  
+
   // Monitor Stellar wallet changes
   useEffect(() => {
     if (stellarWallet?.isConnected) {
@@ -160,7 +160,7 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
       console.log("🔧 Balance ref value:", balanceRef.current)
     }
   }, [stellarWallet, updateCounter])
-
+  
   // Order creation state
   const [enablePartialFills, setEnablePartialFills] = useState(false)
   const [partsCount, setPartsCount] = useState(4)
@@ -219,12 +219,12 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
       // Handle Ethereum tokens (ETH, WETH, USDC)
       if (token.chain === "Sepolia Testnet") {
         if (token.symbol === "ETH" || token.symbol === "WETH") {
-          return {
-            ...token,
-            balance: isConnected && ethBalance ? parseFloat(ethBalance.formatted) : 0,
-            usdValue: isConnected && ethBalance ? parseFloat(ethBalance.formatted) * (priceData.ethereum?.usd || 0) : 0
-          }
+        return {
+          ...token,
+          balance: isConnected && ethBalance ? parseFloat(ethBalance.formatted) : 0,
+          usdValue: isConnected && ethBalance ? parseFloat(ethBalance.formatted) * (priceData.ethereum?.usd || 0) : 0
         }
+      }
         // For other Ethereum tokens (USDC), balance would be fetched separately
         return {
           ...token,
@@ -235,26 +235,26 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
       
       // Handle Stellar tokens (XLM, USDC)
       if (token.chain === "Stellar Testnet") {
-        if (token.symbol === "XLM") {
+      if (token.symbol === "XLM") {
           // Use both stellarWallet.balance and balanceRef.current for redundancy
           const rawBalance = stellarWallet?.balance || balanceRef.current || '0'
           const xlmBalance = stellarWallet?.isConnected ? parseFloat(rawBalance) : 0
           const xlmUsdValue = stellarWallet?.isConnected ? parseFloat(rawBalance) * (priceData.stellar?.usd || 0) : 0
-          
+        
           console.log("⭐ XLM Balance Update:")
           console.log("   - Stellar wallet connected:", stellarWallet?.isConnected)
           console.log("   - Raw balance from wallet:", stellarWallet?.balance)
           console.log("   - Raw balance from ref:", balanceRef.current)
           console.log("   - Used balance:", rawBalance)
-          console.log("   - Parsed balance:", xlmBalance)
-          console.log("   - USD value:", xlmUsdValue)
-          
-          return {
-            ...token,
-            balance: xlmBalance,
-            usdValue: xlmUsdValue
-          }
+        console.log("   - Parsed balance:", xlmBalance)
+        console.log("   - USD value:", xlmUsdValue)
+        
+        return {
+          ...token,
+          balance: xlmBalance,
+          usdValue: xlmUsdValue
         }
+      }
         // For other Stellar tokens (USDC), balance would be fetched separately
         return {
           ...token,

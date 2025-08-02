@@ -31,7 +31,7 @@ import {
 } from 'lucide-react'
 import { useWallet } from '@/components/WalletProvider'
 import { toast } from '@/hooks/use-toast'
-import { resolverContractManager, ResolverOrderExecution, SourceEscrowParams, WithdrawalParams, RelayerVerificationParams } from '@/lib/resolver-contracts'
+import { resolverContractManager, ResolverOrderExecution, SourceEscrowParams, WithdrawalParams} from '@/lib/resolver-contracts'
 import { useWalletClient } from 'wagmi'
 import { ethers } from 'ethers'
 
@@ -92,13 +92,6 @@ export default function ResolverExecutionModal({
         icon: <Building2 className="w-5 h-5" />
       },
       {
-        id: 'escrows-verified',
-        title: 'Verify Escrows',
-        description: 'Verifying both escrows have correct amounts and timelock conditions',
-        status: 'pending',
-        icon: <Shield className="w-5 h-5" />
-      },
-      {
         id: 'withdrawal-timer',
         title: 'Withdrawal Window',
         description: 'Waiting for withdrawal window to open (60 seconds)',
@@ -107,8 +100,8 @@ export default function ResolverExecutionModal({
       },
       {
         id: 'secret-request',
-        title: 'Request Secret',
-        description: 'Requesting secret from buyer via relayer',
+        title: 'Request Secret & Verify Escrows',
+        description: 'Relayer verifies escrows and requests secret from buyer',
         status: 'pending',
         icon: <Key className="w-5 h-5" />
       },
@@ -317,36 +310,11 @@ export default function ResolverExecutionModal({
         message: `Destination escrow created successfully on ${orderExecution.destinationChain}`
       })
       
-      // Step 4: Verify Escrows
-      updateStepStatus('escrows-verified', 'in-progress')
-      console.log('📝 Step 4: Verifying escrows...')
-      
-      const verificationParams: RelayerVerificationParams = {
-        orderId: orderExecution.orderId,
-        sourceEscrowAddress: sourceResult.escrowAddress!,
-        destinationEscrowAddress: destinationResult.escrowAddress!,
-        sourceChain: orderExecution.sourceChain,
-        destinationChain: orderExecution.destinationChain,
-        withdrawalStart: Math.floor(Date.now() / 1000) + 60
-      }
-      
-      const verificationResult = await resolverContractManager.requestRelayerVerification(verificationParams)
-      if (!verificationResult.success) {
-        updateStepStatus('escrows-verified', 'failed', { error: verificationResult.error })
-        throw new Error(`Escrow verification failed: ${verificationResult.error}`)
-      }
-      
-      updateStepStatus('escrows-verified', 'completed', {
-        message: 'Both escrows verified successfully',
-        sourceEscrow: sourceResult.escrowAddress,
-        destinationEscrow: destinationResult.escrowAddress
-      })
-      
-      // Step 5: Withdrawal Timer
+      // Step 4: Withdrawal Timer
       updateStepStatus('withdrawal-timer', 'in-progress', {
         message: 'Escrows deployed successfully. Starting 60-second withdrawal window timer.'
       })
-      console.log('⏰ Step 5: Starting 60-second withdrawal window timer...')
+      console.log('⏰ Step 4: Starting 60-second withdrawal window timer...')
       
       const withdrawalStart = Math.floor(Date.now() / 1000) + 60
       await resolverContractManager.waitForWithdrawalWindow(withdrawalStart)
@@ -355,11 +323,18 @@ export default function ResolverExecutionModal({
         message: 'Withdrawal window is now open. Requesting secret from buyer.'
       })
       
-      // Step 6: Request Secret
+      // Step 5: Request Secret (includes verification)
       updateStepStatus('secret-request', 'in-progress')
-      console.log('🔑 Step 6: Requesting secret from buyer via relayer...')
+      console.log('🔑 Step 5: Requesting secret from buyer via relayer...')
       
-      const secretResult = await resolverContractManager.requestSecretFromBuyer(orderExecution.orderId, orderExecution.segmentIndex)
+      const secretResult = await resolverContractManager.requestSecretFromBuyer(
+        orderExecution.orderId,
+        sourceResult.escrowAddress!,
+        destinationResult.escrowAddress!,
+        orderExecution.sourceChain,
+        orderExecution.destinationChain,
+        orderExecution.segmentIndex
+      )
       if (!secretResult.success) {
         updateStepStatus('secret-request', 'failed', { error: secretResult.error })
         throw new Error(`Secret request failed: ${secretResult.error}`)
@@ -370,9 +345,9 @@ export default function ResolverExecutionModal({
         message: 'Secret received from buyer. Proceeding with withdrawals.'
       })
       
-      // Step 7: Source Withdrawal (resolver gets source tokens)
+      // Step 6: Source Withdrawal (resolver gets source tokens)
       updateStepStatus('source-withdrawal', 'in-progress')
-      console.log('💰 Step 7: Executing source withdrawal (resolver gets source tokens)...')
+      console.log('💰 Step 6: Executing source withdrawal (resolver gets source tokens)...')
       
       const sourceWithdrawalParams: WithdrawalParams = {
         orderId: orderExecution.orderId,
@@ -399,9 +374,9 @@ export default function ResolverExecutionModal({
         message: `Source withdrawal completed successfully on ${orderExecution.sourceChain}`
       })
       
-      // Step 8: Destination Withdrawal (buyer gets destination tokens)
+      // Step 7: Destination Withdrawal (buyer gets destination tokens)
       updateStepStatus('destination-withdrawal', 'in-progress')
-      console.log('💰 Step 8: Executing destination withdrawal (buyer gets destination tokens)...')
+      console.log('💰 Step 7: Executing destination withdrawal (buyer gets destination tokens)...')
       
       const destinationWithdrawalParams: WithdrawalParams = {
         orderId: orderExecution.orderId,
@@ -428,7 +403,7 @@ export default function ResolverExecutionModal({
         message: `Destination withdrawal completed successfully on ${orderExecution.destinationChain}`
       })
       
-      // Step 9: Completion
+      // Step 8: Completion
       updateStepStatus('completion', 'completed', {
         orderCompleted: true,
         sourceEscrowAddress: sourceResult.escrowAddress,
@@ -630,7 +605,7 @@ export default function ResolverExecutionModal({
                 animate={{ opacity: 1, x: 0 }}
                   transition={{ delay: index * 0.1 }}
                 className={`p-4 rounded-2xl border backdrop-blur-sm ${getStepBgColor(step)}`}
-              >
+                >
                 <div className="flex items-start gap-4">
                     {getStepIcon(step)}
                     <div className="flex-1">
