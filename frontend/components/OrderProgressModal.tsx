@@ -46,11 +46,19 @@ export interface OrderProgress {
   destinationEscrowAddress?: string
   sourceWithdrawalTx?: string
   destinationWithdrawalTx?: string
+  // Escrow creation transaction hashes
+  sourceEscrowTx?: string
+  destinationEscrowTx?: string
   // Partial fill segments
   segments?: OrderSegment[]
   error?: string
   createdAt: number
   updatedAt: number
+  // Final order completion details
+  orderCompleted?: boolean
+  sourceWithdrawalHash?: string
+  destinationWithdrawalHash?: string
+  completionMessage?: string
 }
 
 export interface OrderSegment {
@@ -201,6 +209,39 @@ export default function OrderProgressModal({
     return `${address.slice(0, 6)}...${address.slice(-4)}`
   }
 
+  const isEVMAddress = (address: string): boolean => {
+    return address.startsWith('0x') && address.length === 42
+  }
+
+  const isStellarAddress = (address: string): boolean => {
+    return address.startsWith('G') && address.length === 56
+  }
+
+  const isStellarTransaction = (hash: string): boolean => {
+    return hash.length === 64 && !hash.startsWith('0x') && !hash.startsWith('G')
+  }
+
+  const getExplorerUrl = (address: string, type: 'address' | 'transaction' = 'address'): string => {
+    if (isEVMAddress(address)) {
+      // Sepolia Etherscan
+      return `https://sepolia.etherscan.io/${type}/${address}`
+    } else if (isStellarAddress(address)) {
+      // Stellar Testnet Explorer for addresses
+      return `https://stellar.expert/explorer/testnet/address/${address}`
+    } else if (isStellarTransaction(address)) {
+      // Stellar Testnet Explorer for transaction hashes
+      return `https://stellar.expert/explorer/testnet/tx/${address}`
+    }
+    return '#'
+  }
+
+  const openInExplorer = (address: string, type: 'address' | 'transaction' = 'address') => {
+    const url = getExplorerUrl(address, type)
+    if (url !== '#') {
+      window.open(url, '_blank')
+    }
+  }
+
   const formatAmount = (amount: string) => {
     const num = parseFloat(amount)
     if (isNaN(num)) return '0.0000'
@@ -208,10 +249,10 @@ export default function OrderProgressModal({
     // Handle different token decimals
     if (amount.includes('.')) {
       // If it's already a decimal string, format it nicely
-      return num.toFixed(4)
+      return num.toFixed(7)
     } else {
       // For whole numbers, show fewer decimal places
-      return num.toFixed(2)
+      return num.toFixed(7)
     }
   }
 
@@ -339,68 +380,138 @@ export default function OrderProgressModal({
           </div>
 
           {/* Transaction Information */}
-          {(orderData.sourceWithdrawalTx || orderData.destinationWithdrawalTx) && (
+          {(orderData.sourceWithdrawalTx || orderData.destinationWithdrawalTx || orderData.sourceWithdrawalHash || orderData.destinationWithdrawalHash || orderData.sourceEscrowAddress || orderData.destinationEscrowAddress || orderData.sourceEscrowTx || orderData.destinationEscrowTx) && (
             <div className="bg-black/30 backdrop-blur-sm border border-white/10 rounded-2xl p-4">
               <h3 className="text-white font-semibold mb-4">Transaction Details</h3>
               <div className="space-y-3">
-                {orderData.sourceWithdrawalTx && (
+                {/* Source Escrow Creation */}
+                {orderData.sourceEscrowAddress && (
+                  <div className="flex items-center justify-between p-3 bg-white/5 rounded-lg">
+                    <div>
+                      <span className="text-white/60 text-sm">Source Escrow Creation:</span>
+                      <div className="font-mono text-white text-sm">{formatAddress(orderData.sourceEscrowAddress)}</div>
+                      {orderData.sourceEscrowTx && (
+                        <div className="font-mono text-white text-xs mt-1">
+                          TX: {formatAddress(orderData.sourceEscrowTx)}
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => copyToClipboard(orderData.sourceEscrowAddress || '')}
+                        className="border-white/20 text-black hover:bg-white/10"
+                      >
+                        <Copy className="w-3 h-3" />
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => openInExplorer(orderData.sourceEscrowAddress || '', 'address')}
+                        className="border-white/20 text-black hover:bg-white/10"
+                      >
+                        <ExternalLink className="w-3 h-3" />
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Destination Escrow Creation */}
+                {orderData.destinationEscrowAddress && (
+                  <div className="flex items-center justify-between p-3 bg-white/5 rounded-lg">
+                    <div>
+                      <span className="text-white/60 text-sm">Destination Escrow Creation:</span>
+                      <div className="font-mono text-white text-sm">{formatAddress(orderData.destinationEscrowAddress)}</div>
+                      {orderData.destinationEscrowTx && (
+                        <div className="font-mono text-white text-xs mt-1">
+                          TX: {formatAddress(orderData.destinationEscrowTx)}
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => copyToClipboard(orderData.destinationEscrowAddress || '')}
+                        className="border-white/20 text-black hover:bg-white/10"
+                      >
+                        <Copy className="w-3 h-3" />
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => openInExplorer(orderData.destinationEscrowAddress || '', 'address')}
+                        className="border-white/20 text-black hover:bg-white/10"
+                      >
+                        <ExternalLink className="w-3 h-3" />
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Source Withdrawal */}
+                {(orderData.sourceWithdrawalHash || orderData.sourceWithdrawalTx) && (
                   <div className="flex items-center justify-between p-3 bg-white/5 rounded-lg">
                     <div>
                       <span className="text-white/60 text-sm">Source Withdrawal:</span>
-                      <div className="font-mono text-white text-sm">{formatAddress(orderData.sourceWithdrawalTx)}</div>
+                      <div className="font-mono text-white text-sm">
+                        {formatAddress(orderData.sourceWithdrawalHash || orderData.sourceWithdrawalTx || '')}
+                      </div>
                     </div>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => orderData.sourceWithdrawalTx && copyToClipboard(orderData.sourceWithdrawalTx)}
-                      className="border-white/20 text-white hover:bg-white/10"
-                    >
-                      <Copy className="w-3 h-3" />
-                    </Button>
+                    <div className="flex items-center space-x-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => (orderData.sourceWithdrawalHash || orderData.sourceWithdrawalTx) && copyToClipboard(orderData.sourceWithdrawalHash || orderData.sourceWithdrawalTx || '')}
+                        className="border-white/20 text-black hover:bg-white/10"
+                      >
+                        <Copy className="w-3 h-3" />
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => (orderData.sourceWithdrawalHash || orderData.sourceWithdrawalTx) && openInExplorer(orderData.sourceWithdrawalHash || orderData.sourceWithdrawalTx || '', 'transaction')}
+                        className="border-white/20 text-black hover:bg-white/10"
+                      >
+                        <ExternalLink className="w-3 h-3" />
+                      </Button>
+                    </div>
                   </div>
                 )}
-                {orderData.destinationWithdrawalTx && (
+
+                {/* Destination Withdrawal */}
+                {(orderData.destinationWithdrawalHash || orderData.destinationWithdrawalTx) && (
                   <div className="flex items-center justify-between p-3 bg-white/5 rounded-lg">
                     <div>
                       <span className="text-white/60 text-sm">Destination Withdrawal:</span>
-                      <div className="font-mono text-white text-sm">{formatAddress(orderData.destinationWithdrawalTx)}</div>
+                      <div className="font-mono text-white text-sm">
+                        {formatAddress(orderData.destinationWithdrawalHash || orderData.destinationWithdrawalTx || '')}
+                      </div>
                     </div>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => orderData.destinationWithdrawalTx && copyToClipboard(orderData.destinationWithdrawalTx)}
-                      className="border-white/20 text-white hover:bg-white/10"
-                    >
-                      <Copy className="w-3 h-3" />
-                    </Button>
+                    <div className="flex items-center space-x-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => (orderData.destinationWithdrawalHash || orderData.destinationWithdrawalTx) && copyToClipboard(orderData.destinationWithdrawalHash || orderData.destinationWithdrawalTx || '')}
+                        className="border-white/20 text-black hover:bg-white/10"
+                      >
+                        <Copy className="w-3 h-3" />
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => (orderData.destinationWithdrawalHash || orderData.destinationWithdrawalTx) && openInExplorer(orderData.destinationWithdrawalHash || orderData.destinationWithdrawalTx || '', 'transaction')}
+                        className="border-white/20 text-black hover:bg-white/10"
+                      >
+                        <ExternalLink className="w-3 h-3" />
+                      </Button>
+                    </div>
                   </div>
                 )}
               </div>
             </div>
           )}
-
-          {/* Fill Progress Bar */}
-          <div className="bg-black/30 backdrop-blur-sm border border-white/10 rounded-2xl p-4">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-white font-medium">Fill Progress</span>
-              <span className="text-white/60">{orderData.fillPercentage.toFixed(1)}%</span>
-            </div>
-            <div className="w-full bg-white/20 rounded-full h-3">
-              <motion.div
-                className="bg-gradient-to-r from-blue-500 to-green-500 h-3 rounded-full"
-                initial={{ width: 0 }}
-                animate={{ width: `${orderData.fillPercentage}%` }}
-                transition={{ duration: 1, ease: "easeOut" }}
-              />
-            </div>
-            <div className="flex justify-between text-sm text-white/60 mt-2">
-              <span>{formatAmount(orderData.filledAmount)} / {formatAmount(orderData.destinationAmount)}</span>
-              <span>{orderData.orderType === 'partial' && orderData.segments ? 
-                `${orderData.segments.filter(s => s.status === 'segment_withdrawal_completed').length} / ${orderData.segments.length} segments` : 
-                'Single fill'
-              }</span>
-            </div>
-          </div>
 
           {/* Segments (for partial fills) */}
           {orderData.orderType === 'partial' && orderData.segments && (
@@ -435,16 +546,6 @@ export default function OrderProgressModal({
                           {segment.status.replace(/_/g, ' ')}
                         </span>
                       </div>
-                    </div>
-
-                    {/* Segment Progress Bar */}
-                    <div className="w-full bg-white/20 rounded-full h-2 mb-2">
-                      <motion.div
-                        className="bg-gradient-to-r from-blue-500 to-green-500 h-2 rounded-full"
-                        initial={{ width: 0 }}
-                        animate={{ width: `${segment.fillPercentage}%` }}
-                        transition={{ duration: 0.5 }}
-                      />
                     </div>
 
                     {/* Current Status Display */}
@@ -527,9 +628,124 @@ export default function OrderProgressModal({
             >
               <CheckCircle className="w-12 h-12 text-green-400 mx-auto mb-3" />
               <h3 className="text-green-400 font-semibold text-lg mb-2">Order Completed Successfully!</h3>
-              <p className="text-white/60">
-                All funds have been transferred and the order is now complete.
+              <p className="text-white/60 mb-4">
+                {orderData.completionMessage || "All funds have been transferred and the order is now complete."}
               </p>
+              
+              {/* Final Order Details */}
+              {orderData.orderCompleted && (
+                <div className="bg-black/20 rounded-lg p-4 mt-4 text-left">
+                  <h4 className="text-white font-semibold mb-3">Final Order Details</h4>
+                  <div className="space-y-2 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-white/60">Order Completed:</span>
+                      <span className="text-green-400 font-medium">{orderData.orderCompleted ? 'true' : 'false'}</span>
+                    </div>
+                    {orderData.sourceEscrowAddress && (
+                      <div className="flex justify-between items-center">
+                        <span className="text-white/60">Source Escrow Address:</span>
+                        <div className="flex items-center space-x-2">
+                          <span className="text-white font-mono text-xs">{formatAddress(orderData.sourceEscrowAddress)}</span>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => copyToClipboard(orderData.sourceEscrowAddress || '')}
+                            className="border-white/20 text-white hover:bg-white/10 h-6 w-6 p-0"
+                          >
+                            <Copy className="w-2 h-2" />
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => openInExplorer(orderData.sourceEscrowAddress || '', 'address')}
+                            className="border-white/20 text-white hover:bg-white/10 h-6 w-6 p-0"
+                          >
+                            <ExternalLink className="w-2 h-2" />
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                    {orderData.destinationEscrowAddress && (
+                      <div className="flex justify-between items-center">
+                        <span className="text-white/60">Destination Escrow Address:</span>
+                        <div className="flex items-center space-x-2">
+                          <span className="text-white font-mono text-xs">{formatAddress(orderData.destinationEscrowAddress)}</span>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => copyToClipboard(orderData.destinationEscrowAddress || '')}
+                            className="border-white/20 text-white hover:bg-white/10 h-6 w-6 p-0"
+                          >
+                            <Copy className="w-2 h-2" />
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => openInExplorer(orderData.destinationEscrowAddress || '', 'address')}
+                            className="border-white/20 text-white hover:bg-white/10 h-6 w-6 p-0"
+                          >
+                            <ExternalLink className="w-2 h-2" />
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                    {orderData.sourceWithdrawalHash && (
+                      <div className="flex justify-between items-center">
+                        <span className="text-white/60">Source Withdrawal Hash:</span>
+                        <div className="flex items-center space-x-2">
+                          <span className="text-white font-mono text-xs">{formatAddress(orderData.sourceWithdrawalHash)}</span>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => copyToClipboard(orderData.sourceWithdrawalHash || '')}
+                            className="border-white/20 text-white hover:bg-white/10 h-6 w-6 p-0"
+                          >
+                            <Copy className="w-2 h-2" />
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => openInExplorer(orderData.sourceWithdrawalHash || '', 'transaction')}
+                            className="border-white/20 text-white hover:bg-white/10 h-6 w-6 p-0"
+                          >
+                            <ExternalLink className="w-2 h-2" />
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                    {orderData.destinationWithdrawalHash && (
+                      <div className="flex justify-between items-center">
+                        <span className="text-white/60">Destination Withdrawal Hash:</span>
+                        <div className="flex items-center space-x-2">
+                          <span className="text-white font-mono text-xs">{formatAddress(orderData.destinationWithdrawalHash)}</span>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => copyToClipboard(orderData.destinationWithdrawalHash || '')}
+                            className="border-white/20 text-white hover:bg-white/10 h-6 w-6 p-0"
+                          >
+                            <Copy className="w-2 h-2" />
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => openInExplorer(orderData.destinationWithdrawalHash || '', 'transaction')}
+                            className="border-white/20 text-white hover:bg-white/10 h-6 w-6 p-0"
+                          >
+                            <ExternalLink className="w-2 h-2" />
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                    {orderData.completionMessage && (
+                      <div className="flex justify-between">
+                        <span className="text-white/60">Message:</span>
+                        <span className="text-white">{orderData.completionMessage}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </motion.div>
           )}
 

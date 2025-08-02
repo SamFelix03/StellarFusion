@@ -27,7 +27,7 @@ interface StellarWallet {
   publicKey: string
   isConnected: boolean
   balance: string
-  network: 'testnet' | 'mainnet'
+  network: 'TESTNET' | 'MAINNET'
 }
 
 interface WalletContextType {
@@ -165,7 +165,7 @@ function WalletContextProvider({ children }: { children: React.ReactNode }) {
         publicKey,
         isConnected: true,
         balance: balance, // Keep as string to preserve precision
-        network: networkInfo.network as 'testnet' | 'mainnet'
+        network: networkInfo.network as 'TESTNET' | 'MAINNET'
       }
       
       console.log("🔧 Setting Stellar wallet data:", walletData)
@@ -226,7 +226,7 @@ function WalletContextProvider({ children }: { children: React.ReactNode }) {
   // Check if Stellar account exists
   const checkStellarAccount = async (publicKey: string, network: string): Promise<boolean> => {
     try {
-      const horizonUrl = network === 'testnet' 
+      const horizonUrl = network === 'TESTNET' 
         ? 'https://horizon-testnet.stellar.org' 
         : 'https://horizon.stellar.org'
       
@@ -251,7 +251,7 @@ function WalletContextProvider({ children }: { children: React.ReactNode }) {
         return '0'
       }
       
-      const horizonUrl = network === 'testnet' 
+      const horizonUrl = network === 'TESTNET' 
         ? 'https://horizon-testnet.stellar.org' 
         : 'https://horizon.stellar.org'
       

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -140,6 +140,9 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
   const [currentUsdValue, setCurrentUsdValue] = useState(0)
   const [tokensWithBalances, setTokensWithBalances] = useState<Token[]>(mockTokens)
 
+  // Track if tokens have been initialized to prevent resetting user selections
+  const tokensInitializedRef = useRef(false)
+
   // Monitor Stellar wallet changes
   useEffect(() => {
     if (stellarWallet?.isConnected) {
@@ -268,13 +271,55 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
     
     setTokensWithBalances(updatedTokens)
     
-    // Update swap state with first available tokens
-    setSwapState(prev => ({
-      ...prev,
-      fromToken: updatedTokens.find(t => t.chain === "Sepolia Testnet") || null,
-      toToken: updatedTokens.find(t => t.chain === "Stellar Testnet") || null
-    }))
+    // Update existing tokens in swap state with new balance data
+    setSwapState(prev => {
+      const updatedFromToken = prev.fromToken ? updatedTokens.find(t => 
+        t.symbol === prev.fromToken?.symbol && t.chain === prev.fromToken?.chain
+      ) : null
+      
+      const updatedToToken = prev.toToken ? updatedTokens.find(t => 
+        t.symbol === prev.toToken?.symbol && t.chain === prev.toToken?.chain
+      ) : null
+      
+      // Only update if tokens actually changed (different balance/price data)
+      const fromTokenChanged = updatedFromToken && (
+        updatedFromToken.balance !== prev.fromToken?.balance ||
+        updatedFromToken.usdValue !== prev.fromToken?.usdValue
+      )
+      
+      const toTokenChanged = updatedToToken && (
+        updatedToToken.balance !== prev.toToken?.balance ||
+        updatedToToken.usdValue !== prev.toToken?.usdValue
+      )
+      
+      if (fromTokenChanged || toTokenChanged) {
+        return {
+          ...prev,
+          fromToken: updatedFromToken || prev.fromToken,
+          toToken: updatedToToken || prev.toToken
+        }
+      }
+      
+      return prev // No changes needed
+    })
   }, [isConnected, address, ethBalance, stellarWallet, balanceRef.current, updateCounter, priceData])
+
+  // Initialize default tokens only once when component mounts
+  useEffect(() => {
+    if (!tokensInitializedRef.current && tokensWithBalances.length > 0) {
+      const defaultFromToken = tokensWithBalances.find(t => t.chain === "Sepolia Testnet")
+      const defaultToToken = tokensWithBalances.find(t => t.chain === "Stellar Testnet")
+      
+      if (defaultFromToken && defaultToToken) {
+        setSwapState(prev => ({
+          ...prev,
+          fromToken: defaultFromToken,
+          toToken: defaultToToken
+        }))
+        tokensInitializedRef.current = true
+      }
+    }
+  }, [tokensWithBalances]) // Only depend on tokensWithBalances, not the entire swap state
 
   // Calculate USD value when amount or price data changes
   useEffect(() => {
@@ -292,6 +337,31 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
       setCurrentUsdValue(0)
     }
   }, [swapState.fromAmount, swapState.fromToken, priceData])
+
+  // Recalculate conversion rate when price data or tokens change
+  useEffect(() => {
+    if (swapState.fromAmount && swapState.fromToken && swapState.toToken && priceData) {
+      const numValue = parseFloat(swapState.fromAmount) || 0
+      
+      const fromTokenId = swapState.fromToken.coingeckoId
+      const toTokenId = swapState.toToken.coingeckoId
+      
+      if (fromTokenId && toTokenId && priceData[fromTokenId] && priceData[toTokenId]) {
+        const fromPrice = priceData[fromTokenId].usd
+        const toPrice = priceData[toTokenId].usd
+        const conversionRate = fromPrice / toPrice
+        
+        console.log("🔄 Recalculating rate due to price/token change:")
+        console.log("   - Rate:", conversionRate)
+        console.log("   - New toAmount:", (numValue * conversionRate).toFixed(7))
+        
+        setSwapState(prev => ({
+          ...prev,
+          toAmount: (numValue * conversionRate).toFixed(7)
+        }))
+      }
+    }
+  }, [priceData, swapState.fromToken, swapState.toToken])
 
   const openTokenSelector = (type: "from" | "to") => {
     setTokenSelectorType(type)
@@ -339,15 +409,33 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
       const fromTokenId = swapState.fromToken.coingeckoId
       const toTokenId = swapState.toToken.coingeckoId
       
+      console.log("🔄 Rate calculation debug:")
+      console.log("   - From token:", swapState.fromToken.symbol, "ID:", fromTokenId)
+      console.log("   - To token:", swapState.toToken.symbol, "ID:", toTokenId)
+      console.log("   - Price data:", priceData)
+      
       if (fromTokenId && toTokenId && priceData[fromTokenId] && priceData[toTokenId]) {
-        conversionRate = priceData[fromTokenId].usd / priceData[toTokenId].usd
+        const fromPrice = priceData[fromTokenId].usd
+        const toPrice = priceData[toTokenId].usd
+        
+        console.log("   - From price (USD):", fromPrice)
+        console.log("   - To price (USD):", toPrice)
+        
+        // Calculate rate: how many 'to' tokens per 'from' token
+        conversionRate = fromPrice / toPrice
+        
+        console.log("   - Calculated rate:", conversionRate)
+      } else {
+        console.log("   - Missing price data, using fallback rate:", conversionRate)
       }
+    } else {
+      console.log("   - Missing tokens or price data, using fallback rate:", conversionRate)
     }
     
     setSwapState(prev => ({
       ...prev,
       fromAmount: value,
-      toAmount: value ? (numValue * conversionRate).toFixed(4) : ""
+      toAmount: value ? (numValue * conversionRate).toFixed(7) : ""
     }))
   }
 
@@ -431,8 +519,13 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
         throw new Error('Stellar address required for this transaction')
       }
       
+      // Set primary buyer address based on SOURCE chain (where buyer is spending tokens)
+      const primaryBuyerAddress = swapState.fromChain === "Stellar Testnet" 
+        ? buyerStellarAddress  // Stellar is source, use Stellar address as primary
+        : buyerEthAddress      // EVM is source, use EVM address as primary
+
       const orderData = createOrder({
-        buyerAddress: buyerEthAddress || buyerStellarAddress, // Primary address (source chain)
+        buyerAddress: primaryBuyerAddress, // Primary address (source chain where buyer spends tokens)
         buyerEthAddress: buyerEthAddress,
         buyerStellarAddress: buyerStellarAddress,
         sourceChain: swapState.fromChain,
@@ -472,9 +565,22 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
       setLoadingStep(2); // Step 2: Buyer preparation
       
       // Step 1: Prepare buyer (APPROVAL PHASE) - IMMEDIATELY after order creation
+      // ONLY prepare the buyer based on the SOURCE chain (where buyer is spending tokens)
       
-      // Handle Ethereum approvals
-      if (swapState.fromChain === "Sepolia Testnet" || swapState.toChain === "Sepolia Testnet") {
+      if (swapState.fromChain === "Stellar Testnet") {
+        // Stellar is SOURCE: buyer is spending Stellar tokens
+        if (!stellarWallet?.isConnected) {
+          throw new Error('Stellar wallet not connected for source chain operations');
+        }
+        
+        console.log('🌟 Preparing Stellar buyer - Stellar is the source chain');
+        await prepareStellarBuyer(
+          orderData.srcToken as string,
+          orderData.srcAmount as string,
+          stellarWallet
+        );
+      } else {
+        // EVM is SOURCE: buyer is spending EVM tokens (ETH, WETH, etc.)
         if (!address) {
           throw new Error('Ethereum wallet not connected');
         }
@@ -483,25 +589,12 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
           throw new Error('Ethereum wallet client not available');
         }
         
+        console.log('🔗 Preparing EVM buyer - EVM is the source chain');
         await prepareBuyer(
-          swapState.fromChain, // Use the actual chain name instead of chain ID
-          orderData.srcToken as string,
-          orderData.srcAmount as string,
+          swapState.fromChain,
+          swapState.fromToken?.symbol || "ETH", // Extract symbol from token object
+          swapState.fromAmount,
           walletClient
-        );
-      }
-      
-      // Handle Stellar approvals (if needed)
-      if (swapState.fromChain === "Stellar Testnet" || swapState.toChain === "Stellar Testnet") {
-        if (!stellarWallet?.isConnected) {
-          throw new Error('Stellar wallet not connected');
-        }
-        
-        // For Stellar, we might need to handle trustlines or other approvals
-        await prepareStellarBuyer(
-          orderData.srcToken as string,
-          orderData.srcAmount as string,
-          stellarWallet
         );
       }
       
@@ -785,7 +878,7 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
                     <span className="text-sm text-white/60">You pay</span>
                     <div className="flex items-center space-x-2">
                       <span className="text-sm text-white/60">
-                        Balance: {swapState.fromToken?.balance.toFixed(4) || "0.0000"}
+                        Balance: {swapState.fromToken?.balance.toFixed(7) || "0.0000000"}
                       </span>
                       <Button
                         variant="ghost"
@@ -855,7 +948,7 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-sm text-white/60">You receive</span>
                     <span className="text-sm text-white/60">
-                      Balance: {swapState.toToken?.balance.toFixed(4) || "0.0000"}
+                      Balance: {swapState.toToken?.balance.toFixed(7) || "0.0000000"}
                     </span>
                   </div>
                   
@@ -903,10 +996,25 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
                       ? (() => {
                           const fromTokenId = swapState.fromToken.coingeckoId
                           const toTokenId = swapState.toToken.coingeckoId
+                          
+                          console.log("📊 Exchange rate display debug:")
+                          console.log("   - From token:", swapState.fromToken.symbol, "ID:", fromTokenId)
+                          console.log("   - To token:", swapState.toToken.symbol, "ID:", toTokenId)
+                          console.log("   - Price data:", priceData)
+                          
                           if (fromTokenId && toTokenId && priceData[fromTokenId] && priceData[toTokenId]) {
-                            const rate = priceData[fromTokenId].usd / priceData[toTokenId].usd
-                            return `1 ${swapState.fromToken.symbol} = ${rate.toFixed(2)} ${swapState.toToken.symbol}`
+                            const fromPrice = priceData[fromTokenId].usd
+                            const toPrice = priceData[toTokenId].usd
+                            const rate = fromPrice / toPrice
+                            
+                            console.log("   - From price (USD):", fromPrice)
+                            console.log("   - To price (USD):", toPrice)
+                            console.log("   - Calculated rate:", rate)
+                            
+                            return `1 ${swapState.fromToken.symbol} = ${rate.toFixed(7)} ${swapState.toToken.symbol}`
                           }
+                          
+                          console.log("   - Missing price data, using fallback")
                           return `1 ${swapState.fromToken.symbol} = 1.5 ${swapState.toToken.symbol}`
                         })()
                       : `1 ${swapState.fromToken?.symbol || "ETH"} = 1.5 ${swapState.toToken?.symbol || "XLM"}`
@@ -976,7 +1084,7 @@ export default function SwapInterface({ onBackToHome }: { onBackToHome?: () => v
                       <div>
                         <div>XLM: {stellarWallet.publicKey.slice(0, 6)}...{stellarWallet.publicKey.slice(-4)}</div>
                         <div className="text-xs text-white/40 mt-1">
-                          Balance: {parseFloat(stellarWallet.balance || balanceRef.current).toFixed(4)} XLM
+                          Balance: {parseFloat(stellarWallet.balance || balanceRef.current).toFixed(7)} XLM
                         </div>
                       </div>
                     )}
