@@ -295,6 +295,8 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
       sourceAmount: parseFloat(tokenInfo.srcAmount) || 0,
       // Use database fields directly from auction object
       buyerAddress: auction.buyerAddress,
+      buyerEthAddress: auction.buyerEthAddress,
+      buyerStellarAddress: auction.buyerStellarAddress,
       srcChainId: auction.srcChainId,
       dstChainId: auction.dstChainId,
       srcToken: auction.srcToken,
@@ -526,6 +528,8 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
           ...pendingConfirmation,
           // Database fields are already included in the auction object
           buyerAddress: pendingConfirmation.buyerAddress,
+          buyerEthAddress: pendingConfirmation.buyerEthAddress,
+          buyerStellarAddress: pendingConfirmation.buyerStellarAddress,
           srcChainId: pendingConfirmation.srcChainId,
           dstChainId: pendingConfirmation.dstChainId,
           srcToken: pendingConfirmation.srcToken,
@@ -548,6 +552,8 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
           ...pendingConfirmation,
           // Database fields are already included in the auction object
           buyerAddress: pendingConfirmation.buyerAddress,
+          buyerEthAddress: pendingConfirmation.buyerEthAddress,
+          buyerStellarAddress: pendingConfirmation.buyerStellarAddress,
           srcChainId: pendingConfirmation.srcChainId,
           dstChainId: pendingConfirmation.dstChainId,
           srcToken: pendingConfirmation.srcToken,

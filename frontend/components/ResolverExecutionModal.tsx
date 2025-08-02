@@ -221,7 +221,10 @@ export default function ResolverExecutionModal({
         stellarSecretKey = stellarWallet.publicKey
       }
       
-      // Use complete order data from database
+      // Use complete order data from database with proper buyer addresses for each chain
+      const sourceBuyerAddress = getBuyerAddressForChain(auction, sourceChain)
+      const destinationBuyerAddress = getBuyerAddressForChain(auction, destinationChain)
+      
       const orderExecution: ResolverOrderExecution = {
         orderId: auction.orderId,
         sourceChain,
@@ -230,14 +233,17 @@ export default function ResolverExecutionModal({
         destinationToken: auction.dstToken || auction.tokenName || 'XLM',
         sourceAmount: auction.srcAmount?.toString() || auction.sourceAmount?.toString() || '0',
         destinationAmount: auction.dstAmount?.toString() || auction.currentPrice?.toString() || '0',
+        // Use the general buyer address - specific addresses will be selected per chain
         buyerAddress: auction.buyerAddress,
+        buyerEthAddress: auction.buyerEthAddress,
+        buyerStellarAddress: auction.buyerStellarAddress,
         resolverAddress,
         hashedSecret: auction.hashedSecret || generateMockHashedSecret(),
         isPartialFill: auction.auctionType === 'segmented',
         segmentIndex: 0,
         totalParts: auction.auctionType === 'segmented' ? (auction.segments?.length || 1) : 1,
         evmSigner,
-        stellarKeypair: stellarWallet,
+        stellarWallet: stellarWallet,
         stellarSecretKey
       }
       
@@ -245,9 +251,11 @@ export default function ResolverExecutionModal({
       updateStepStatus('source-escrow', 'in-progress')
       console.log('📝 Step 2: Creating source escrow on source chain...')
       
+      console.log(`🔗 Using buyer address for source chain (${orderExecution.sourceChain}): ${sourceBuyerAddress}`)
+      
       const sourceParams: SourceEscrowParams = {
         orderId: orderExecution.orderId,
-        buyerAddress: orderExecution.buyerAddress,
+        buyerAddress: sourceBuyerAddress,
         resolverAddress: orderExecution.resolverAddress,
         srcAmount: orderExecution.sourceAmount,
         hashedSecret: orderExecution.hashedSecret,
@@ -256,9 +264,9 @@ export default function ResolverExecutionModal({
         totalParts: orderExecution.totalParts
       }
       
-      // Create source escrow on the SOURCE chain
+      // Create source escrow on the SOURCE chain using appropriate wallet
       const sourceResult = orderExecution.sourceChain === 'stellar-testnet'
-        ? await resolverContractManager.createSourceEscrowStellar(orderExecution.sourceChain, sourceParams)
+        ? await resolverContractManager.createSourceEscrowStellar(orderExecution.sourceChain, sourceParams, stellarWallet)
         : await resolverContractManager.createSourceEscrowEVM(orderExecution.sourceChain, sourceParams, orderExecution.evmSigner!)
       
       if (!sourceResult.success) {
@@ -276,22 +284,16 @@ export default function ResolverExecutionModal({
       updateStepStatus('destination-escrow', 'in-progress')
       console.log('📝 Step 3: Creating destination escrow on destination chain...')
       
-      // Get the correct buyer address for the destination chain
-      const destinationBuyerAddress = resolverContractManager.getBuyerAddressForChain(
-        auction, 
-        orderExecution.destinationChain
-      )
-      
       console.log(`🔗 Using buyer address for destination chain (${orderExecution.destinationChain}): ${destinationBuyerAddress}`)
       
-      // Create destination escrow on the DESTINATION chain
+      // Create destination escrow on the DESTINATION chain using appropriate wallet
       const destinationResult = orderExecution.destinationChain === 'stellar-testnet'
         ? await resolverContractManager.createDestinationEscrowStellar(
             orderExecution.destinationChain,
             orderExecution.hashedSecret,
             destinationBuyerAddress,
             orderExecution.destinationAmount,
-            orderExecution.stellarKeypair,
+            stellarWallet,
             orderExecution.isPartialFill,
             orderExecution.segmentIndex,
             orderExecution.totalParts
@@ -370,7 +372,7 @@ export default function ResolverExecutionModal({
       }
       
       const sourceWithdrawalResult = orderExecution.sourceChain === 'stellar-testnet'
-        ? await resolverContractManager.withdrawFromStellarEscrow(sourceWithdrawalParams, orderExecution.stellarKeypair)
+        ? await resolverContractManager.withdrawFromStellarEscrow(sourceWithdrawalParams, stellarWallet)
         : await resolverContractManager.withdrawFromEVMEscrow(sourceWithdrawalParams, orderExecution.evmSigner!)
       
       if (!sourceWithdrawalResult.success) {
@@ -399,7 +401,7 @@ export default function ResolverExecutionModal({
       }
       
       const destinationWithdrawalResult = orderExecution.destinationChain === 'stellar-testnet'
-        ? await resolverContractManager.withdrawFromStellarEscrow(destinationWithdrawalParams, orderExecution.stellarKeypair)
+        ? await resolverContractManager.withdrawFromStellarEscrow(destinationWithdrawalParams, stellarWallet)
         : await resolverContractManager.withdrawFromEVMEscrow(destinationWithdrawalParams, orderExecution.evmSigner!)
       
       if (!destinationWithdrawalResult.success) {
@@ -517,6 +519,28 @@ export default function ResolverExecutionModal({
       'Stellar Testnet': 'stellar-testnet'
     }
     return mapping[chainDisplayName] || 'sepolia'
+  }
+  
+  // Get the correct buyer address for a specific chain
+  const getBuyerAddressForChain = (auction: any, chainId: string): string => {
+    console.log('🔍 Getting buyer address for chain:', chainId)
+    console.log('📋 Available buyer addresses:', {
+      buyerAddress: auction.buyerAddress,
+      buyerEthAddress: auction.buyerEthAddress,
+      buyerStellarAddress: auction.buyerStellarAddress
+    })
+    
+    if (chainId === 'stellar-testnet') {
+      // For Stellar chain, use Stellar address if available, otherwise fall back to general address
+      const stellarAddress = auction.buyerStellarAddress
+      console.log('🌟 Using Stellar buyer address:', stellarAddress)
+      return stellarAddress
+    } else {
+      // For EVM chains (sepolia, etc.), use ETH address if available, otherwise fall back to general address
+      const evmAddress = auction.buyerEthAddress
+      console.log('🔗 Using EVM buyer address:', evmAddress)
+      return evmAddress
+    }
   }
   
   const generateMockHashedSecret = (): string => {

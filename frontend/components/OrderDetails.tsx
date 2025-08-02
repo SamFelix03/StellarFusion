@@ -291,6 +291,8 @@ export default function OrderDetails({
                   {JSON.stringify({
                     orderId: orderData.orderId,
                     buyerAddress: orderData.buyerAddress,
+                    buyerStellarAddress: orderData.buyerStellarAddress,
+                    buyerEthAddress: orderData.buyerEthAddress,
                     srcChainId: orderData.srcChainId,
                     dstChainId: orderData.dstChainId,
                     srcToken: orderData.srcToken,
