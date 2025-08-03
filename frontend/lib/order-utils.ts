@@ -368,10 +368,10 @@ export async function prepareStellarBuyer(
   sourceAmount: string,
   stellarWallet: any
 ): Promise<void> {
-  console.log('🔐 Preparing Stellar buyer approval...');
-  console.log('📋 Token:', sourceToken);
-  console.log('💰 Source Amount:', sourceAmount);
-  console.log('👛 Wallet:', stellarWallet?.publicKey);
+  console.log('= Preparing Stellar buyer approval...');
+  console.log('= Token:', sourceToken);
+  console.log('= Source Amount:', sourceAmount);
+  console.log('=[ Wallet:', stellarWallet?.publicKey);
   
   try {
     // Validate wallet connection
@@ -388,12 +388,12 @@ export async function prepareStellarBuyer(
     // For Stellar, we need to approve both the token contract AND the factory contract
     // For native XLM, we call the approve function on both contracts
     if (sourceToken.toLowerCase() === 'xlm') {
-      console.log('💎 Processing native XLM approvals...');
+      console.log('= Processing native XLM approvals...');
       
       // Convert source amount to stroops (1 XLM = 10,000,000 stroops)
       // Approve 2x the source amount to ensure sufficient allowance
       const amountInStroops = Math.floor(parseFloat(sourceAmount) * 10_000_000 * 2);
-      console.log(`💰 Approval amount: ${sourceAmount} XLM * 2 = ${amountInStroops} stroops`);
+      console.log(`= Approval amount: ${sourceAmount} XLM * 2 = ${amountInStroops} stroops`);
       
       // Initialize server
       const server = new rpc.Server("https://soroban-testnet.stellar.org");
@@ -402,16 +402,16 @@ export async function prepareStellarBuyer(
       const xlmTokenAddress = stellarConfig.tokens.XLM.address;
       const factoryAddress = stellarConfig.factoryAddress;
       
-      console.log('🔑 Using connected Freighter wallet for approvals');
-      console.log('📋 XLM Token Contract:', xlmTokenAddress);
-      console.log('📋 Factory Contract:', factoryAddress);
-      console.log('📋 Buyer Address:', stellarWallet.publicKey);
+      console.log('= Using connected Freighter wallet for approvals');
+      console.log('= XLM Token Contract:', xlmTokenAddress);
+      console.log('= Factory Contract:', factoryAddress);
+      console.log('= Buyer Address:', stellarWallet.publicKey);
       
       // Get account details
       const account = await server.getAccount(stellarWallet.publicKey);
       
       // Step 1: Approve the XLM token contract
-      console.log('📝 Step 1: Approving XLM token contract...');
+      console.log('= Step 1: Approving XLM token contract...');
       console.log('   Contract:', xlmTokenAddress);
       console.log('   From (buyer):', stellarWallet.publicKey);
       console.log('   Spender (factory):', factoryAddress);
@@ -439,7 +439,7 @@ export async function prepareStellarBuyer(
       // Prepare and sign token approval transaction
       const preparedTokenTx = await server.prepareTransaction(tokenApprovalTx);
       
-      console.log('📝 Requesting signature for token approval from Freighter...');
+      console.log('= Requesting signature for token approval from Freighter...');
       const tokenSignResult = await signTransaction(preparedTokenTx.toXDR(), {
         networkPassphrase: Networks.TESTNET,
         address: stellarWallet.publicKey
@@ -453,14 +453,19 @@ export async function prepareStellarBuyer(
       const signedTokenTx = xdr.TransactionEnvelope.fromXDR(tokenSignResult.signedTxXdr, 'base64');
       const signedTokenTransaction = new Transaction(signedTokenTx, Networks.TESTNET);
       
-      console.log('📝 Sending token approval transaction...');
+      console.log('= Sending token approval transaction...');
       const tokenResponse = await server.sendTransaction(signedTokenTransaction);
       
-      console.log('✅ XLM token contract approval successful!');
-      console.log('📋 Token Approval Hash:', tokenResponse.hash);
+      console.log(' XLM token contract approval successful!');
+      console.log('= Token Approval Hash:', tokenResponse.hash);
+      
+      // Add 10-second delay between token and factory approval
+      console.log('= Waiting 10 seconds before factory approval...');
+      await new Promise(resolve => setTimeout(resolve, 10000));
+      console.log('= Proceeding with factory approval...');
       
       // Step 2: Approve the factory contract (if needed for additional operations)
-      console.log('📝 Step 2: Approving factory contract...');
+      console.log('= Step 2: Approving factory contract...');
       console.log('   Contract:', factoryAddress);
       console.log('   Caller (buyer):', stellarWallet.publicKey);
       console.log('   Amount (stroops):', amountInStroops);
@@ -488,7 +493,7 @@ export async function prepareStellarBuyer(
       // Prepare and sign factory approval transaction
       const preparedFactoryTx = await server.prepareTransaction(factoryApprovalTx);
       
-      console.log('📝 Requesting signature for factory approval from Freighter...');
+      console.log('= Requesting signature for factory approval from Freighter...');
       const factorySignResult = await signTransaction(preparedFactoryTx.toXDR(), {
         networkPassphrase: Networks.TESTNET,
         address: stellarWallet.publicKey
@@ -502,35 +507,23 @@ export async function prepareStellarBuyer(
       const signedFactoryTx = xdr.TransactionEnvelope.fromXDR(factorySignResult.signedTxXdr, 'base64');
       const signedFactoryTransaction = new Transaction(signedFactoryTx, Networks.TESTNET);
       
-      console.log('📝 Sending factory approval transaction...');
+      console.log('= Sending factory approval transaction...');
       const factoryResponse = await server.sendTransaction(signedFactoryTransaction);
       
-      console.log('✅ Factory contract approval successful!');
-      console.log('📋 Factory Approval Hash:', factoryResponse.hash);
-      console.log('📋 Total Approved Amount:', amountInStroops, 'stroops (', amountInStroops / 10000000, 'XLM)');
-      console.log('📋 Approved by:', stellarWallet.publicKey);
-      console.log('📋 Token contract:', xlmTokenAddress);
-      console.log('📋 Factory contract:', factoryAddress);
+      console.log(' Factory contract approval successful!');
+      console.log('= Factory Approval Hash:', factoryResponse.hash);
+      console.log('= Total Approved Amount:', amountInStroops, 'stroops (', amountInStroops / 10000000, 'XLM)');
+      console.log('= Approved by:', stellarWallet.publicKey);
+      console.log('= Token contract:', xlmTokenAddress);
+      console.log('= Factory contract:', factoryAddress);
       
     } else {
-      // For other Stellar tokens, we would need to set up trustlines
-      console.log('🪙 Processing custom Stellar token:', sourceToken);
-      console.log('📝 Setting up Stellar trustline for token:', sourceToken);
-      console.log('💰 Amount:', sourceAmount);
-      
-      // In a real implementation, you would:
-      // 1. Check if trustline exists for the custom token
-      // 2. Create trustline if it doesn't exist  
-      // 3. Then approve the factory contract to spend the tokens
-      
-      throw new Error(`Custom Stellar tokens not yet implemented. Only native XLM is supported.`);
+      throw new Error(`Token ${sourceToken} not supported yet. Only XLM is currently supported.`);
     }
     
-    console.log('🎉 Stellar buyer preparation completed successfully!');
-    
   } catch (error) {
-    console.error('❌ Error during Stellar preparation:', error);
-    throw new Error(`Stellar preparation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    console.error('L Stellar approval failed:', error);
+    throw error;
   }
 }
 
