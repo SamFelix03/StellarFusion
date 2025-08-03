@@ -540,7 +540,7 @@ export async function sendOrderToRelayer(orderData: OrderData, isPartialFill: bo
   console.log('📤 SENDING ORDER TO RELAYER');
   console.log('📤 ========================================');
   
-  const endpoint = isPartialFill ? 'http://localhost:8000/partialfill' : 'http://localhost:8000/create';
+  const endpoint = isPartialFill ? 'https://cf5806eb751e.ngrok-free.app/partialfill' : 'https://cf5806eb751e.ngrok-free.app/create';
   console.log(`🌐 Endpoint: ${endpoint}`);
   console.log(`🔀 Order type: ${isPartialFill ? 'Partial Fill' : 'Single Fill'}`);
   
@@ -641,7 +641,7 @@ export async function fetchHashedSecretFromDatabase(orderId: string): Promise<st
   console.log('📋 Order ID:', orderId);
   
   try {
-    const response = await fetch(`http://localhost:8000/get-hashed-secret`, {
+    const response = await fetch(`https://cf5806eb751e.ngrok-free.app/get-hashed-secret`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -692,7 +692,7 @@ export async function shareSecretsWithRelayer(orderData: OrderData): Promise<any
     // For single fill orders, send the main secret
     console.log('🔑 Sharing single fill secret...');
     
-    const response = await fetch(`http://localhost:8000/orders/${orderData.orderId}/secret`, {
+    const response = await fetch(`https://cf5806eb751e.ngrok-free.app/orders/${orderData.orderId}/secret`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -750,7 +750,7 @@ export async function shareSegmentSecret(orderId: string, segmentId: number, ord
   console.log(`   Proof elements: ${merkleProof.length}`);
   
   try {
-    const response = await fetch(`http://localhost:8000/orders/${orderId}/segment-secret`, {
+    const response = await fetch(`https://cf5806eb751e.ngrok-free.app/orders/${orderId}/segment-secret`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

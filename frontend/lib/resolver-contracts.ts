@@ -1557,7 +1557,7 @@ export class ResolverContractManager {
       console.log('📤 Request body being sent:', JSON.stringify(requestBody, null, 2));
       
       // Step 1: Request secret from relayer with actual escrow addresses and chain information
-      const requestResponse = await fetch(`http://localhost:8000/resolver/request-secret`, {
+      const requestResponse = await fetch(`https://cf5806eb751e.ngrok-free.app/resolver/request-secret`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1582,7 +1582,7 @@ export class ResolverContractManager {
         await new Promise(resolve => setTimeout(resolve, 5000)) // Wait 5 seconds
         
         // Check if secret has been shared
-        const checkResponse = await fetch(`http://localhost:8000/orders/${orderId}`)
+        const checkResponse = await fetch(`https://cf5806eb751e.ngrok-free.app/orders/${orderId}`)
         if (checkResponse.ok) {
           const orderData = await checkResponse.json()
           const order = orderData.data
@@ -1639,7 +1639,7 @@ export class ResolverContractManager {
     segmentId?: number
   ): Promise<void> {
     try {
-      const response = await fetch(`http://localhost:8000/resolver/progress`, {
+      const response = await fetch(`https://cf5806eb751e.ngrok-free.app/resolver/progress`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1671,7 +1671,7 @@ export class ResolverContractManager {
     segmentId?: number
   ): Promise<void> {
     try {
-      const response = await fetch(`http://localhost:8000/resolver/escrow-created`, {
+      const response = await fetch(`https://cf5806eb751e.ngrok-free.app/resolver/escrow-created`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1692,7 +1692,7 @@ export class ResolverContractManager {
       }
 
       // Also update the order with the escrow address for verification
-      const updateResponse = await fetch(`http://localhost:8000/orders/${orderId}`, {
+      const updateResponse = await fetch(`https://cf5806eb751e.ngrok-free.app/orders/${orderId}`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -1721,7 +1721,7 @@ export class ResolverContractManager {
     segmentId?: number
   ): Promise<void> {
     try {
-      const response = await fetch(`http://localhost:8000/resolver/withdrawal-completed`, {
+      const response = await fetch(`https://cf5806eb751e.ngrok-free.app/withdrawal-completed`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1750,7 +1750,7 @@ export class ResolverContractManager {
     segmentId?: number
   ): Promise<void> {
     try {
-      const response = await fetch(`http://localhost:8000/resolver/order-completed`, {
+      const response = await fetch(`https://cf5806eb751e.ngrok-free.app/resolver/order-completed`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

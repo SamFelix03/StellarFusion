@@ -4,8 +4,8 @@ const WebSocket = require('ws');
 
 class Maker {
   constructor() {
-    this.baseUrl = 'http://localhost:3000';
-    this.wsUrl = 'ws://localhost:8080';
+    this.baseUrl = 'https://cf5806eb751e.ngrok-free.app';
+    this.wsUrl = 'wss://7c0c84d53b51.ngrok-free.app';
     this.ws = null;
     this.mode = null;
     this.secrets = [];

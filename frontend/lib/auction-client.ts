@@ -114,8 +114,8 @@ class DutchAuctionClient implements AuctionClient {
 
   connect(): void {
     try {
-      console.log('🔗 Attempting to connect to WebSocket server at ws://localhost:8080')
-      this.ws = new WebSocket('ws://localhost:8080')
+      console.log('🔗 Attempting to connect to WebSocket server at wss://7c0c84d53b51.ngrok-free.app')
+      this.ws = new WebSocket('wss://7c0c84d53b51.ngrok-free.app')
       
       // Set a connection timeout
       const connectionTimeout = setTimeout(() => {

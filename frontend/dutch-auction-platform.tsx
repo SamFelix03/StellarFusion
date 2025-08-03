@@ -124,7 +124,7 @@ export default function Component({ onBackToHome }: { onBackToHome?: () => void 
   // Fetch order data from relayer
   const fetchOrderData = async (orderId: string): Promise<OrderData | null> => {
     try {
-      const response = await fetch(`http://localhost:8000/orders/${orderId}`)
+      const response = await fetch(`https://cf5806eb751e.ngrok-free.app/orders/${orderId}`)
       if (!response.ok) {
         console.warn(`⚠️ Failed to fetch order data for ${orderId}:`, response.status)
         return null
