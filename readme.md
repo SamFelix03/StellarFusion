@@ -4,23 +4,29 @@
 
 1. [Introduction](#introduction)
 
-2. [Order Creation](#order-creation)
+2. [Important Files](#important-files)
+
+3. [Deployed Contract Addresses](#deployed-contract-addresses)
+
+4. [Swap Results](#swap-results)
+
+5. [Order Creation](#order-creation)
    - [Fusion+ Swaps](#fusion-swaps)
    - [Partial Fills](#partial-fills)
 
-3. [Dutch Auction](#dutch-auction)
+6. [Dutch Auction](#dutch-auction)
 
-4. [Escrow Creations](#escrow-creations)
+7. [Escrow Creations](#escrow-creations)
    - [Escrow Creations in Fusion+ Swaps](#escrow-creations-in-fusion-swaps)
    - [Escrow Creations in Partial Fills](#escrow-creations-in-partial-fills)
 
-5. [Validation and Checking](#validation-and-checking)
+8. [Validation and Checking](#validation-and-checking)
 
-6. [Secret Exchange](#secret-exchange)
+9. [Secret Exchange](#secret-exchange)
 
-7. [Withdrawal](#withdrawal)
+10. [Withdrawal](#withdrawal)
 
-8. [Conclusion](#conclusion)
+11. [Conclusion](#conclusion)
 
 ---
 
@@ -48,6 +54,58 @@ The platform combines the speed and efficiency of Stellar with the robust smart 
 
 ---
 
+## Important Files
+
+### Smart Contracts
+- **Ethereum Contracts**: [EscrowFactory.sol](https://github.com/SamFelix03/StellarFusion/blob/master/Blockend/contracts/EscrowFactory.sol) - Factory contract for creating hash-locked escrows
+- **Stellar Contracts**: [Escrow Factory](https://github.com/SamFelix03/StellarFusion/tree/master/Blockend/stellar-contracts/escrow-factory) - Soroban smart contracts for Stellar-side escrows
+- **Stellar LOP Contract**: [limit-order-protocol](https://github.com/SamFelix03/StellarFusion/tree/master/Blockend/stellar-contracts/escrow-factory/contracts/limit-order-protocol) - Limit Order Protocol integration
+
+### Backend Services
+- **Relayer Server**: [server.js](https://github.com/SamFelix03/StellarFusion/blob/master/relayer/server.js) - Dutch auction coordination and cross-chain validation
+
+### CLI Tools
+- **CLI Demo**: [dynamic-swap.ts](https://github.com/SamFelix03/StellarFusion/blob/master/Blockend/src/dynamic-swap.ts) - Interactive command-line interface for testing swaps
+
+### Frontend Components
+- **Resolver Contracts**: [resolver-contracts.ts](https://github.com/SamFelix03/StellarFusion/blob/master/frontend/lib/resolver-contracts.ts) - Contract interaction utilities
+- **Resolver Execution Modal**: [ResolverExecutionModal.tsx](https://github.com/SamFelix03/StellarFusion/blob/master/frontend/components/ResolverExecutionModal.tsx) - UI for resolver operations
+- **Auction Client**: [auction-client.ts](https://github.com/SamFelix03/StellarFusion/blob/master/frontend/lib/auction-client.ts) - WebSocket client for real-time auction updates
+
+### Utility Files
+- **Order Utils**: [order-utils.ts](https://github.com/SamFelix03/StellarFusion/blob/master/frontend/lib/order-utils.ts) - Order creation and secret management
+- **Hash Lock**: [hash-lock.ts](https://github.com/SamFelix03/StellarFusion/blob/master/Blockend/src/hash-lock.ts) - SHA256 hash lock implementation
+
+## Deployed Contract Addresses
+
+### Ethereum Sepolia Testnet
+- **Factory Contract**: `0x4F25B17649F0A056138E251487c27A22D793DBA7`
+- **LOP Contract**: `0x13F4118A0C9AA013eeB078f03318aeea84469cDD`
+
+### Stellar Testnet
+- **Factory Contract**: `CD3TAVDMTRSPT475FP2APSC3MRQFOHVKEMJYPUGGQRP3KS4B5UBPCFH6`
+- **LOP Contract**: `CCFLX4NZH4MVTQ5DYO74LEB3S7U2GO6OH3VP4NPYF4CXXSXR4GPRXEXV`
+
+## Swap Results
+
+### Successful Cross-Chain Swap Transactions
+
+**Part 1 Transactions:**
+- **Stellar Source Escrow Creation**: [239fdd28a1847f860c8908636763fc7744290e7131cb45751224c3a94fcc98a7](https://stellar.expert/explorer/testnet/tx/239fdd28a1847f860c8908636763fc7744290e7131cb45751224c3a94fcc98a7)
+- **Ethereum Destination Escrow Creation**: [0x4bd8638a50daa0cb39a235e20dc5a9a55340d2a92579618c85b157f164c3d3ac](https://sepolia.etherscan.io/tx/0x4bd8638a50daa0cb39a235e20dc5a9a55340d2a92579618c85b157f164c3d3ac)
+- **Stellar Source Withdrawal**: [30ffc4bc1bce688cf5214aa9df3fedc142c34230be95e0bdd7240cbfdef6190d](https://stellar.expert/explorer/testnet/tx/30ffc4bc1bce688cf5214aa9df3fedc142c34230be95e0bdd7240cbfdef6190d)
+- **Ethereum Destination Withdrawal**: [0xa83fffc99e07ca10b328b9181e4bed55bd5a5d5f7c0a3bfe73f3a10d6ea6377a](https://sepolia.etherscan.io/tx/0xa83fffc99e07ca10b328b9181e4bed55bd5a5d5f7c0a3bfe73f3a10d6ea6377a)
+
+**Part 2 Transactions:**
+- **Stellar Source Escrow Creation**: [5a0a052789a903e19f4e510a39eb0931a79d088488654b5eed11d2ec6746c69d](https://stellar.expert/explorer/testnet/tx/5a0a052789a903e19f4e510a39eb0931a79d088488654b5eed11d2ec6746c69d)
+- **Ethereum Destination Escrow Creation**: [0x7a11bfccbc125c625bbd7764a9af3f107664ee22acb958649f43045043a79d6e](https://sepolia.etherscan.io/tx/0x7a11bfccbc125c625bbd7764a9af3f107664ee22acb958649f43045043a79d6e)
+- **Stellar Source Withdrawal**: [81126b251e89114539509f541bdee598f4fee1d6c07094088f3f420c551b09a4](https://stellar.expert/explorer/testnet/tx/81126b251e89114539509f541bdee598f4fee1d6c07094088f3f420c551b09a4)
+- **Ethereum Destination Withdrawal**: [0xacfdc6e2424363da2573f1fc9fb9242816e1d3a03502c59ca91b421471771ed5](https://sepolia.etherscan.io/tx/0xacfdc6e2424363da2573f1fc9fb9242816e1d3a03502c59ca91b421471771ed5)
+
+[Click here to see logs of a successful swap transaction](https://github.com/SamFelix03/StellarFusion/blob/master/Blockend/logs/success-log.md)
+
+---
+
 ## Order Creation
 
 ### Fusion+ Swaps
@@ -66,14 +124,9 @@ The order creation process begins in the frontend interface
 
 StellarFusion implements a sophisticated hash lock system that ensures atomic execution of cross-chain swaps:
 
-**Core Hash Lock Class (`src/hash-lock.ts`):**
+**Core Hash Lock Implementation** ([hash-lock.ts](https://github.com/SamFelix03/StellarFusion/blob/master/Blockend/src/hash-lock.ts)):
 ```typescript
-// From hash-lock.ts lines 13-22
 public static hashSecret(secret: string): string {
-    if (!secret.startsWith('0x') || secret.length !== 66) {
-        throw new Error('secret must be 32 bytes hex encoded with 0x prefix');
-    }
-
     const hash = createHash('sha256');
     hash.update(Buffer.from(secret.slice(2), 'hex'));
     return '0x' + hash.digest('hex');
@@ -82,36 +135,27 @@ public static hashSecret(secret: string): string {
 
 #### Relayer Integration
 
-The frontend sends order data to the relayer through the `sendOrderToRelayer()` function:
+The frontend sends order data to the relayer through the `sendOrderToRelayer()` function ([order-utils.ts](https://github.com/SamFelix03/StellarFusion/blob/master/frontend/lib/order-utils.ts)):
 
 ```typescript
-// From order-utils.ts lines 370-450
-export async function sendOrderToRelayer(orderData: OrderData, isPartialFill: boolean = false): Promise<any> {
+export async function sendOrderToRelayer(orderData: OrderData, isPartialFill: boolean): Promise<any> {
   const endpoint = isPartialFill ? 'http://localhost:8000/partialfill' : 'http://localhost:8000/create';
   
-  // Prepare request body (including hashedSecret for resolver)
-  const requestBody: any = {
-    orderId: orderData.orderId,
-    buyerAddress: orderData.buyerAddress,
-    srcChainId: orderData.srcChainId,
-    dstChainId: orderData.dstChainId,
-    srcToken: orderData.srcToken,
-    dstToken: orderData.dstToken,
-    srcAmount: orderData.srcAmount,
-    dstAmount: orderData.dstAmount,
-    market_price: orderData.market_price,
-    slippage: orderData.slippage,
-    hashedSecret: orderData.hashedSecret // Include hashedSecret for resolver
-  };
-
   const response = await fetch(endpoint, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(requestBody),
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      orderId: orderData.orderId,
+      buyerAddress: orderData.buyerAddress,
+      hashedSecret: orderData.hashedSecret,
+      srcChainId: orderData.srcChainId,
+      dstChainId: orderData.dstChainId,
+      srcToken: orderData.srcToken,
+      dstToken: orderData.dstToken,
+      srcAmount: orderData.srcAmount,
+      dstAmount: orderData.dstAmount
+    }),
   });
-
   return await response.json();
 }
 ```
@@ -161,55 +205,33 @@ The partial fill configuration process begins in the frontend interface with the
 
 #### Order Data Generation
 
-The `createOrder()` function in `frontend/lib/order-utils.ts` generates partial fill orders with Merkle tree implementation:
+The `createOrder()` function generates partial fill orders with Merkle tree implementation ([order-utils.ts](https://github.com/SamFelix03/StellarFusion/blob/master/frontend/lib/order-utils.ts)):
 
 ```typescript
-// From order-utils.ts lines 43-100
 export function createOrder(params: OrderCreationParams): OrderData {
   let secret: string;
   let hashedSecret: string;
-  let partialFillManager: PartialFillOrderManager | undefined;
-  let partialFillSecrets: string[] | undefined;
-  let partialFillSecretHashes: string[] | undefined;
 
-  if (params.enablePartialFills && params.partsCount && params.partsCount > 1) {
-    console.log(`🌳 Creating partial fill order with ${params.partsCount} parts`);
-    
+  if (params.enablePartialFills && params.partsCount > 1) {
     // Create partial fill manager with merkle tree
-    partialFillManager = new PartialFillOrderManager(params.partsCount);
+    const partialFillManager = new PartialFillOrderManager(params.partsCount);
     hashedSecret = partialFillManager.getHashLock();
-    // Use first secret as the main order secret (for backwards compatibility)
     secret = partialFillManager.getSecret(0);
-    
-    // Store all secrets and hashes for UI display
-    partialFillSecrets = partialFillManager.getAllSecrets();
-    partialFillSecretHashes = partialFillManager.getAllSecretHashes();
-    
-    console.log(`📋 Generated ${params.partsCount + 1} secrets for partial fill (including extra)`);
-    console.log(`🔐 HashLock (Merkle Root): ${hashedSecret}`);
-    console.log(`🔑 Main secret (first secret): ${secret.slice(0, 10)}...`);
   } else {
-    // Single fill logic (same as Fusion+ Swaps)
+    // Single fill logic
     const secretBytes = ethers.utils.randomBytes(32);
     secret = ethers.utils.hexlify(secretBytes);
     hashedSecret = ethers.utils.sha256(secretBytes);
   }
   
   return {
-    orderId,
+    orderId: ethers.utils.keccak256(ethers.utils.toUtf8Bytes(Date.now().toString())),
     buyerAddress: params.buyerAddress,
     srcChainId: chainsConfig[params.sourceChain].chainId,
     dstChainId: chainsConfig[params.destinationChain].chainId,
-    srcToken: params.sourceToken,
-    dstToken: params.destinationToken,
-    srcAmount: params.sourceAmount,
-    dstAmount: params.destinationAmount,
     hashedSecret,
     secret,
-    isPartialFillEnabled: params.enablePartialFills,
-    partialFillManager,
-    partialFillSecrets,
-    partialFillSecretHashes
+    isPartialFillEnabled: params.enablePartialFills
   };
 }
 ```
@@ -286,17 +308,13 @@ When a Fusion+ swap order is created, the Dutch auction system initializes with 
 
 #### Client Communication
 
-The auction system maintains real-time communication with resolvers through WebSocket connections:
+The auction system maintains real-time communication with resolvers through WebSocket connections ([server.js](https://github.com/SamFelix03/StellarFusion/blob/master/relayer/server.js)):
 
 ```javascript
-// From server.js lines 650-680
 this.broadcastToAll({
   type: 'single_auction_update',
   orderId: orderId,
   currentPrice: Math.round(auction.currentPrice * 100) / 100,
-  startPrice: auction.startPrice,
-  endPrice: auction.minimumPrice,
-  marketPrice: auction.marketPrice,
   hashedSecret: auction.hashedSecret,
   buyerAddress: auction.buyerAddress
 });
@@ -304,18 +322,12 @@ this.broadcastToAll({
 
 #### Auction Completion
 
-Upon completion, the system updates the order status and broadcasts final results:
+Upon completion, the system updates the order status and broadcasts final results ([server.js](https://github.com/SamFelix03/StellarFusion/blob/master/relayer/server.js)):
 
 ```javascript
-// From server.js lines 896-930
 const auctionData = {
   winner: auction.winner || null,
   finalPrice: Math.floor(auction.currentPrice),
-  startPrice: auction.startPrice,
-  endPrice: auction.minimumPrice,
-  marketPrice: auction.marketPrice,
-  sourceAmount: auction.sourceAmount,
-  slippage: auction.slippage,
   auctionType: 'single',
   status: status,
   completedAt: new Date().toISOString()
@@ -336,10 +348,9 @@ When a partial fill order is created, the Dutch auction system initializes with 
 
 #### Individual Segment Management
 
-Each segment operates independently with its own price reduction mechanism:
+Each segment operates independently with its own price reduction mechanism ([server.js](https://github.com/SamFelix03/StellarFusion/blob/master/relayer/server.js)):
 
 ```javascript
-// From server.js lines 710-740
 const interval = setInterval(() => {
   if (segment.winner) {
     clearInterval(interval);
@@ -350,7 +361,6 @@ const interval = setInterval(() => {
   const priceReduction = segment.currentPrice * 0.05;
   segment.currentPrice = Math.max(segment.endPrice, segment.currentPrice - priceReduction);
   
-  // Broadcast updated price for this segment
   this.broadcastToAll({
     type: 'segment_update',
     orderId: orderId,
@@ -362,36 +372,27 @@ const interval = setInterval(() => {
 
 #### Segment Winner Determination
 
-Each segment can have its own winner, allowing for distributed execution:
+Each segment can have its own winner, allowing for distributed execution ([server.js](https://github.com/SamFelix03/StellarFusion/blob/master/relayer/server.js)):
 
 ```javascript
-// From server.js lines 180-200
 if (segment && segment.status === 'active' && !segment.winner) {
   segment.winner = data.name;
-  
-  console.log(`\n🎉 SEGMENT ${segmentId} WINNER: ${data.name} confirmed at price ${Math.floor(segment.currentPrice)}!`);
-  
-  // End this specific segment
+  console.log(`🎉 SEGMENT ${segmentId} WINNER: ${data.name} confirmed!`);
   this.endSegment(confirmOrderId, segmentId, 'completed');
 }
 ```
 
 #### Comprehensive Auction Results
 
-Upon completion of all segments, the system calculates comprehensive results:
+Upon completion of all segments, the system calculates comprehensive results ([server.js](https://github.com/SamFelix03/StellarFusion/blob/master/relayer/server.js)):
 
 ```javascript
-// From server.js lines 850-880
 const totalWinners = auction.totalWinners.filter(win => win.winner !== null).length;
 const totalAmount = auction.totalWinners.reduce((sum, win) => sum + win.amount, 0);
-const totalValue = auction.totalWinners.reduce((sum, win) => sum + (win.price * win.amount), 0);
-const effectiveRate = totalValue / totalAmount;
 
-console.log(`\n📊 SEGMENTED AUCTION RESULTS for order ${orderId}:`);
+console.log(`📊 SEGMENTED AUCTION RESULTS for order ${orderId}:`);
 console.log(`🏆 Total winners: ${totalWinners}`);
 console.log(`💰 Total amount: ${totalAmount}`);
-console.log(`💵 Total value: ${totalValue}`);
-console.log(`📈 Effective rate: ${effectiveRate.toFixed(2)}`);
 ```
 #### Key Advantages of Segmented Auctions
 
@@ -444,59 +445,8 @@ StellarFusion implements a sophisticated four-tier time lock system that ensures
 - **Cancellation Start**: 10 minutes after escrow creation (private cancellation window begins)
 - **Public Cancellation Start**: 15 minutes after escrow creation (public cancellation window begins)
 
+**Factory Contract Implementation** ([EscrowFactory.sol](https://github.com/SamFelix03/StellarFusion/blob/master/Blockend/contracts/EscrowFactory.sol)):
 ```solidity
-// From EscrowFactory.sol lines 103-130
-function createSrcEscrow(
-    bytes32 hashedSecret,
-    address recipient,
-    address buyer,
-    uint256 tokenAmount,
-    uint256 withdrawalStart,        // 1 minute after creation
-    uint256 publicWithdrawalStart,  // 5 minutes after creation
-    uint256 cancellationStart,      // 10 minutes after creation
-    uint256 publicCancellationStart, // 15 minutes after creation
-    uint256 partIndex,
-    uint16 totalParts
-) external payable nonReentrant {
-    // Validate time window progression
-    require(
-        publicWithdrawalStart > withdrawalStart &&
-        cancellationStart > publicWithdrawalStart &&
-        publicCancellationStart > cancellationStart,
-        "Invalid time windows"
-    );
-}
-```
-
-#### Security Deposit Management
-
-Each escrow creation requires a security deposit to ensure resolver commitment:
-
-**Security Deposit Requirements:**
-- **Amount**: 0.001 ETH per escrow contract
-- **Purpose**: Ensures resolver commitment
-- **Refund**: Returned to resolver upon successful withdrawal
-- **Forfeiture**: Lost if resolver fails to complete the swap
-
-```solidity
-// From EscrowFactory.sol lines 50-55
-contract HashLockedEscrowFactory is ReentrancyGuard {
-    uint256 public constant DEPOSIT_AMOUNT = 0.001 ether;
-    
-    function createSrcEscrow(...) external payable nonReentrant {
-        require(msg.value == DEPOSIT_AMOUNT, "Incorrect ETH deposit");
-        // ... rest of function
-    }
-}
-```
-
-#### Cross-Chain Source Escrow Creation
-
-The winner creates the source escrow on the source chain (which could be Ethereum, Stellar, or any supported chain) through the appropriate factory contract:
-
-**Ethereum Source Escrow Creation:**
-```solidity
-// From EscrowFactory.sol lines 103-170
 function createSrcEscrow(
     bytes32 hashedSecret,
     address recipient,
@@ -511,56 +461,73 @@ function createSrcEscrow(
 ) external payable nonReentrant {
     require(msg.value == DEPOSIT_AMOUNT, "Incorrect ETH deposit");
     require(tokenAmount > 0, "Token amount must be > 0");
-    require(recipient != address(0), "Invalid recipient");
-    require(buyer != address(0), "Invalid buyer");
     
-    // Validate time window progression
-    require(
-        publicWithdrawalStart > withdrawalStart &&
-        cancellationStart > publicWithdrawalStart &&
-        publicCancellationStart > cancellationStart,
-        "Invalid time windows"
-    );
-
-    // Create SourceEscrow contract
+    // Create and deploy escrow contract
     SourceEscrow escrow = new SourceEscrow{value: msg.value}(
-        buyer,  // Creator
-        recipient,
-        hashedSecret,
-        WETH,
-        tokenAmount,
-        withdrawalStart,
-        publicWithdrawalStart,
-        cancellationStart,
-        publicCancellationStart,
-        partIndex,
-        totalParts
-    );
-
-    address escrowAddress = address(escrow);
-    userEscrows[buyer].push(escrowAddress);
-    isEscrowContract[escrowAddress] = true;
-
-    // Transfer tokens from buyer to escrow
-    IERC20(WETH).transferFrom(buyer, escrowAddress, tokenAmount);
-
-    emit SrcEscrowCreated(
-        buyer,
-        recipient,
-        escrowAddress,
-        hashedSecret,
-        tokenAmount,
-        withdrawalStart,
-        publicWithdrawalStart,
-        cancellationStart,
-        publicCancellationStart
+        buyer, recipient, hashedSecret, WETH, tokenAmount,
+        withdrawalStart, publicWithdrawalStart, cancellationStart, publicCancellationStart,
+        partIndex, totalParts
     );
 }
 ```
 
-**Stellar Source Escrow Creation:**
+#### Security Deposit Management
+
+Each escrow creation requires a security deposit to ensure resolver commitment:
+
+**Security Deposit Requirements:**
+- **Amount**: 0.001 ETH per escrow contract
+- **Purpose**: Ensures resolver commitment
+- **Refund**: Returned to resolver upon successful withdrawal
+- **Forfeiture**: Lost if resolver fails to complete the swap
+
+**Security Deposit Implementation** ([EscrowFactory.sol](https://github.com/SamFelix03/StellarFusion/blob/master/Blockend/contracts/EscrowFactory.sol)):
+```solidity
+contract HashLockedEscrowFactory is ReentrancyGuard {
+    uint256 public constant DEPOSIT_AMOUNT = 0.001 ether;
+    
+    function createSrcEscrow(...) external payable nonReentrant {
+        require(msg.value == DEPOSIT_AMOUNT, "Incorrect ETH deposit");
+    }
+}
+```
+
+#### Cross-Chain Source Escrow Creation
+
+The winner creates the source escrow on the source chain (which could be Ethereum, Stellar, or any supported chain) through the appropriate factory contract:
+
+**Ethereum Source Escrow Creation** ([EscrowFactory.sol](https://github.com/SamFelix03/StellarFusion/blob/master/Blockend/contracts/EscrowFactory.sol)):
+```solidity
+function createSrcEscrow(
+    bytes32 hashedSecret,
+    address recipient,
+    address buyer,
+    uint256 tokenAmount,
+    uint256 withdrawalStart,
+    uint256 publicWithdrawalStart,
+    uint256 cancellationStart,
+    uint256 publicCancellationStart,
+    uint256 partIndex,
+    uint16 totalParts
+) external payable nonReentrant {
+    require(msg.value == DEPOSIT_AMOUNT, "Incorrect ETH deposit");
+    
+    // Create SourceEscrow contract
+    SourceEscrow escrow = new SourceEscrow{value: msg.value}(
+        buyer, recipient, hashedSecret, WETH, tokenAmount,
+        withdrawalStart, publicWithdrawalStart, cancellationStart, publicCancellationStart,
+        partIndex, totalParts
+    );
+
+    // Transfer tokens from buyer to escrow
+    IERC20(WETH).transferFrom(buyer, address(escrow), tokenAmount);
+    
+    emit SrcEscrowCreated(buyer, recipient, address(escrow), hashedSecret, tokenAmount);
+}
+```
+
+**Stellar Source Escrow Creation** ([limit-order-protocol/src/lib.rs](https://github.com/SamFelix03/StellarFusion/blob/master/Blockend/stellar-contracts/escrow-factory/contracts/limit-order-protocol/src/lib.rs)):
 ```rust
-// From limit-order-protocol/src/lib.rs lines 100-180
 pub fn fill_order(
     env: Env,
     order_hash: BytesN<32>,
@@ -573,79 +540,31 @@ pub fn fill_order(
     part_index: u64,
     total_parts: u32,
 ) -> Address {
-    // Validate inputs
-    if total_parts == 0 {
-        panic!("Total parts must be > 0");
-    }
-    if part_index >= total_parts as u64 {
-        panic!("Invalid part index");
-    }
-    if token_amount <= 0 {
-        panic!("Token amount must be > 0");
-    }
-
-    // Check if this part is already filled
-    let part_filled: bool = env.storage()
-        .persistent()
-        .get(&DataKey::PartsFilled(order_hash.clone(), part_index))
-        .unwrap_or(false);
-    if part_filled {
-        panic!("Part already filled");
-    }
-
-    // Check allowance - LOP must be approved to spend maker's tokens
+    // Validate allowance
     let current_allowance = Self::allowance(env.clone(), maker.clone(), env.current_contract_address());
     if current_allowance < token_amount {
         panic!("Insufficient allowance");
     }
-    
-    // Reduce allowance
-    let new_allowance = current_allowance - token_amount;
-    env.storage().persistent().set(
-        &DataKey::TokenAllowance(maker.clone(), env.current_contract_address()),
-        &new_allowance
-    );
 
-    // Get factory address and create escrow
+    // Get factory and create escrow
     let factory_address: Address = env.storage().instance().get(&DataKey::EscrowFactory).unwrap();
     let factory_client = EscrowFactoryTraitClient::new(&env, &factory_address);
     
-    // Create escrow using factory client
     let escrow_address = factory_client.create_src_escrow_partial(
-        &env.current_contract_address(), // creator (LOP)
+        &env.current_contract_address(),
         &hashed_secret,
         &recipient,
-        &maker,        // buyer
+        &maker,
         &token_amount,
         &withdrawal_start,
         &public_withdrawal_start,
-        &(withdrawal_start + 86400), // cancellation_start (24 hours after withdrawal)
+        &(withdrawal_start + 86400),
         &part_index,
         &total_parts,
     );
 
-    // Track the filled order
-    let filled_order = FilledOrder {
-        order_hash: order_hash.clone(),
-        maker: maker.clone(),
-        recipient: recipient.clone(),
-        escrow_address: escrow_address.clone(),
-        part_index,
-        total_parts,
-        is_active: true,
-    };
-
-    // Store order data
-    let mut filled_orders: Vec<FilledOrder> = env.storage()
-        .persistent()
-        .get(&DataKey::FilledOrders(order_hash.clone()))
-        .unwrap_or(Vec::new(&env));
-    filled_orders.push_back(filled_order);
-    env.storage().persistent().set(&DataKey::FilledOrders(order_hash.clone()), &filled_orders);
-
     // Mark part as filled
     env.storage().persistent().set(&DataKey::PartsFilled(order_hash.clone(), part_index), &true);
-
     escrow_address
 }
 ```
@@ -654,9 +573,8 @@ pub fn fill_order(
 
 The winner creates the destination escrow on the destination chain through the appropriate factory contract:
 
-**Ethereum Destination Escrow Creation:**
+**Ethereum Destination Escrow Creation** ([EscrowFactory.sol](https://github.com/SamFelix03/StellarFusion/blob/master/Blockend/contracts/EscrowFactory.sol)):
 ```solidity
-// From EscrowFactory.sol lines 175-220
 function createDstEscrow(
     bytes32 hashedSecret,
     address recipient,
@@ -668,52 +586,21 @@ function createDstEscrow(
     uint16 totalParts
 ) external payable nonReentrant {
     require(msg.value == DEPOSIT_AMOUNT, "Incorrect ETH deposit");
-    require(tokenAmount > 0, "Token amount must be > 0");
-    require(recipient != address(0), "Invalid recipient");
-    
-    // Validate time windows
-    require(
-        publicWithdrawalStart > withdrawalStart &&
-        cancellationStart > publicWithdrawalStart,
-        "Invalid time windows"
-    );
 
     // Create DestinationEscrow contract
     DestinationEscrow escrow = new DestinationEscrow{value: msg.value}(
-        msg.sender,
-        recipient,
-        hashedSecret,
-        WETH,
-        tokenAmount,
-        withdrawalStart,
-        publicWithdrawalStart,
-        cancellationStart,
-        partIndex,
-        totalParts
+        msg.sender, recipient, hashedSecret, WETH, tokenAmount,
+        withdrawalStart, publicWithdrawalStart, cancellationStart,
+        partIndex, totalParts
     );
 
-    address escrowAddress = address(escrow);
-    userEscrows[msg.sender].push(escrowAddress);
-    isEscrowContract[escrowAddress] = true;
-
-    IERC20(WETH).transferFrom(msg.sender, escrowAddress, tokenAmount);
-
-    emit DstEscrowCreated(
-        msg.sender,
-        recipient,
-        escrowAddress,
-        hashedSecret,
-        tokenAmount,
-        withdrawalStart,
-        publicWithdrawalStart,
-        cancellationStart
-    );
+    IERC20(WETH).transferFrom(msg.sender, address(escrow), tokenAmount);
+    emit DstEscrowCreated(msg.sender, recipient, address(escrow), hashedSecret, tokenAmount);
 }
 ```
 
-**Stellar Destination Escrow Creation:**
+**Stellar Destination Escrow Creation** ([resolver/src/lib.rs](https://github.com/SamFelix03/StellarFusion/blob/master/Blockend/stellar-contracts/escrow-factory/contracts/resolver/src/lib.rs)):
 ```rust
-// From resolver/src/lib.rs lines 304-350
 pub fn create_destination_escrow(
     env: Env,
     caller: Address,
@@ -726,23 +613,14 @@ pub fn create_destination_escrow(
     part_index: u64,
     total_parts: u32,
 ) -> Address {
-    // Only owner can create destination escrows
-    let owner: Address = env.storage().instance().get(&DataKey::Owner).unwrap();
-    if caller != owner {
-        panic!("Only owner can create destination escrows");
-    }
     caller.require_auth();
 
-    // Get factory address
-    let factory_address: Address = env.storage()
-        .instance()
-        .get(&DataKey::EscrowFactory)
-        .unwrap();
-
-    // Create destination escrow through factory
+    // Get factory and create destination escrow
+    let factory_address: Address = env.storage().instance().get(&DataKey::EscrowFactory).unwrap();
     let factory_client = EscrowFactoryTraitClient::new(&env, &factory_address);
+    
     let escrow_address = factory_client.create_dst_escrow_partial(
-        &caller, // creator (resolver)
+        &caller,
         &hashed_secret,
         &recipient,
         &amount,
@@ -752,9 +630,6 @@ pub fn create_destination_escrow(
         &part_index,
         &total_parts,
     );
-
-    log!(&env, "DestinationEscrowCreated: escrowAddress={}, hashedSecret={}, recipient={}, amount={}, partIndex={}", 
-         escrow_address, hashed_secret, recipient, amount, part_index);
 
     escrow_address
 }
@@ -775,14 +650,12 @@ Stellar Fusion implements multiple layers of cryptographic security:
 - **Hash Calculation**: SHA256 hash of secret for cross-chain compatibility
 - **Hash Verification**: Both Ethereum and Stellar use SHA256 for consistency
 
+**Withdrawal Implementation** ([EscrowFactory.sol](https://github.com/SamFelix03/StellarFusion/blob/master/Blockend/contracts/EscrowFactory.sol)):
 ```solidity
-// From EscrowFactory.sol lines 280-290
 function withdraw(bytes calldata secret) external nonReentrant {
-    // Use SHA256 instead of keccak256 for Stellar compatibility
     require(sha256(secret) == hashedSecret, "Invalid secret");
-    
     fundsWithdrawn = true;
-    // ... withdrawal logic
+    // Transfer funds and security deposit to caller
 }
 ```
 
@@ -791,11 +664,11 @@ function withdraw(bytes calldata secret) external nonReentrant {
 - **State Changes**: State variables are updated before external calls
 - **Checks-Effects-Interactions Pattern**: Strict adherence to security patterns
 
+**Reentrancy Protection Implementation** ([EscrowFactory.sol](https://github.com/SamFelix03/StellarFusion/blob/master/Blockend/contracts/EscrowFactory.sol)):
 ```solidity
-// From EscrowFactory.sol lines 103-105
 function createSrcEscrow(...) external payable nonReentrant {
     require(msg.value == DEPOSIT_AMOUNT, "Incorrect ETH deposit");
-    // ... validation and state changes before external calls
+    // Validation and state changes before external calls
 }
 ```
 
@@ -803,22 +676,16 @@ function createSrcEscrow(...) external payable nonReentrant {
 
 The system maintains comprehensive state tracking for each escrow:
 
-**Source Escrow State Variables:**
+**Source Escrow State Variables** ([EscrowFactory.sol](https://github.com/SamFelix03/StellarFusion/blob/master/Blockend/contracts/EscrowFactory.sol)):
 ```solidity
-// From EscrowFactory.sol lines 230-250
 contract SourceEscrow is ReentrancyGuard {
     address public immutable creator;
     address public immutable recipient;
     bytes32 public immutable hashedSecret;
-    address public immutable token;
     uint256 public immutable amount;
-    uint256 public immutable securityDeposit;
-    
-    // Time lock parameters
     uint256 public immutable withdrawalStart;
     uint256 public immutable publicWithdrawalStart;
     uint256 public immutable cancellationStart;
-    uint256 public immutable publicCancellationStart;
     
     bool public fundsWithdrawn;
     bool public cancelled;
