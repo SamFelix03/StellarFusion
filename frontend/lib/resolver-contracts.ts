@@ -653,8 +653,8 @@ export class ResolverContractManager {
       
       const receipt = await tx.wait()
       
-      // Extract escrow address from receipt
-      const dstEscrowCreatedTopic = ethers.utils.id("DstEscrowCreated(address,address,address,bytes32,uint256,uint256,uint256)")
+      // Extract escrow address from receipt - corrected event signature
+      const dstEscrowCreatedTopic = ethers.utils.id("DstEscrowCreated(address,address,address,bytes32,uint256,uint256,uint256,uint256)")
       const dstEscrowCreatedEvent = receipt.logs.find((log: any) => 
         log.topics && log.topics[0] === dstEscrowCreatedTopic
       )
@@ -662,6 +662,10 @@ export class ResolverContractManager {
       let escrowAddress = ""
       if (dstEscrowCreatedEvent) {
         escrowAddress = ethers.utils.getAddress("0x" + dstEscrowCreatedEvent.data.slice(26, 66))
+        console.log('✅ Extracted destination escrow address from event:', escrowAddress);
+      } else {
+        console.error('❌ DstEscrowCreated event not found in receipt logs');
+        console.log('Available logs:', receipt.logs.map((log: any) => log.topics[0]));
       }
       
       // Notify relayer of destination escrow creation
