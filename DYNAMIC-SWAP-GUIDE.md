@@ -1,6 +1,45 @@
 # CLI Cross-Chain Swap Demo Guide
 
-## Quick Setup & Run
+## Environment Setup
+
+#### 1. Copy the example file:
+```bash
+cp .env.example .env
+```
+
+#### 2. Fill in your own values in `.env`:
+
+**EVM Keys (Required):**
+- `BUYER_PRIVATE_KEY=your_evm_buyer_private_key`
+- `RESOLVER_PRIVATE_KEY=your_evm_resolver_private_key`
+
+**Stellar Keys (Required):**
+- `STELLAR_BUYER_SECRET=your_stellar_buyer_secret_key`
+- `STELLAR_RESOLVER_SECRET=your_stellar_resolver_secret_key`
+- `STELLAR_BUYER_ADDRESS=your_stellar_buyer_public_address`
+- `STELLAR_RESOLVER_ADDRESS=your_stellar_resolver_public_address`
+
+#### 3. Configure Stellar CLI Identities:
+
+**Important**: You must run these commands to set up the required Stellar identities:
+
+```bash
+# Configure stellar-buyer identity
+soroban keys add stellar-buyer --secret-key
+# When prompted, enter the value from your STELLAR_BUYER_SECRET environment variable
+
+# Configure stellar-resolver identity  
+soroban keys add stellar-resolver --secret-key
+# When prompted, enter the value from your STELLAR_RESOLVER_SECRET environment variable
+```
+
+**Important:** Make sure your wallets have testnet funds:
+- Sepolia ETH for gas fees
+- Stellar XLM for transaction fees
+
+---
+
+## Quick Setup & Run (AFTER Configuration Above)
 
 ### Prerequisites ✅
 You must already have these installed:
@@ -24,34 +63,9 @@ npm install
 npm run swap
 ```
 
-**That's it!** ✨ The system will use the existing `.env` configuration.
-
 ---
 
-## Environment Setup Required
-
-You need to create your own `.env` file with your wallet credentials:
-
-#### 1. Copy the example file:
-```bash
-cp .env.example .env
-```
-
-#### 2. Fill in your own values in `.env`:
-
-**EVM Keys (Required):**
-- `BUYER_PRIVATE_KEY=your_evm_buyer_private_key`
-- `RESOLVER_PRIVATE_KEY=your_evm_resolver_private_key`
-
-**Stellar Keys (Required):**
-- `STELLAR_BUYER_SECRET=your_stellar_buyer_secret_key`
-- `STELLAR_RESOLVER_SECRET=your_stellar_resolver_secret_key`
-- `STELLAR_BUYER_ADDRESS=your_stellar_buyer_public_address`
-- `STELLAR_RESOLVER_ADDRESS=your_stellar_resolver_public_address`
-
-**Important:** Make sure your wallets have testnet funds:
-- Sepolia ETH for gas fees
-- Stellar XLM for transaction fees
+## Reference Information
 
 **Contract Addresses:**
 
