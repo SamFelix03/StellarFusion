@@ -1,161 +1,213 @@
-# Dynamic Cross-Chain Swap Interface
+# CLI Cross-Chain Swap Demo Guide
 
-## Overview
+## Quick Setup & Run
 
-This dynamic interface allows you to perform cross-chain atomic swaps between Sepolia Testnet and BSC Testnet with an interactive CLI that guides you through the entire process.
+### Prerequisites ✅
+You must already have these installed:
+- ✅ **soroban-cli** (found at `/Users/sam/.cargo/bin/soroban`)
+- ✅ **stellar-cli** (found at `/Users/sam/.cargo/bin/stellar`)
 
-## Features
+### 3-Step Setup
 
-- 🔄 **Interactive CLI**: Select chains, tokens, and amounts through prompts
-- 💰 **Price Calculation**: Automatic destination amount calculation (currently 1:1 for testing)
-- 🌐 **Multi-Chain Support**: Sepolia ↔ BSC Testnet
-- 🪙 **Token Support**: Native tokens (ETH/BNB), Wrapped tokens (WETH/WBNB), and stablecoins (USDC/USDT)
-- 🔒 **Automatic Wrapping**: Native tokens are automatically wrapped when needed
-- ⚡ **Gas Optimization**: Reduced gas costs for efficient transactions
+#### 1. Navigate to Blockend directory
+```bash
+cd /Users/sam/1inch-final/Blockend
+```
 
-## Prerequisites
+#### 2. Install dependencies  
+```bash
+npm install
+```
 
-1. **Environment Setup**: Ensure your `.env` file contains:
-   ```
-   BUYER_PRIVATE_KEY=your_buyer_private_key
-   RESOLVER_PRIVATE_KEY=your_resolver_private_key
-   ```
-
-2. **Funded Accounts**:
-   - Buyer needs native tokens on the source chain
-   - Resolver needs native tokens on both chains
-
-3. **Deployed Contracts**: Factory contracts must be deployed on both chains (addresses in `config/chains.json`)
-
-## Usage
-
-### Run the Dynamic Interface
-
+#### 3. Run the swap interface
 ```bash
 npm run swap
 ```
 
-### Interactive Flow
+**That's it!** ✨ The system will use the existing `.env` configuration.
 
-1. **Select Source Chain**: Choose between Sepolia Testnet or BSC Testnet
-2. **Select Destination Chain**: Choose the other chain
-3. **Select Source Token**: Pick from available tokens on source chain
-4. **Select Destination Token**: Pick from available tokens on destination chain
-5. **Enter Amount**: Specify how much of the source token to swap
-6. **Review Summary**: Check the swap details and current prices
-7. **Confirm**: Proceed with the swap execution
+---
 
-### Example Flow
+## Environment Setup Required
 
-```
-🚀 Welcome to Dynamic Cross-Chain Atomic Swap Interface
-========================================================
+You need to create your own `.env` file with your wallet credentials:
 
-? Select source chain: Sepolia Testnet
-? Select destination chain: BSC Testnet
-? Select source token: Ethereum (ETH)
-? Select destination token: Binance Coin (BNB)
-? Enter amount of ETH to swap: 0.01
-
-💰 Fetching current prices...
-💱 Testing mode: 1:1 conversion - 0.01 ETH = 0.01 BNB
-
-📋 Swap Summary
-===============
-Source: 0.01 ETH on Sepolia Testnet
-Destination: 0.010000 BNB on BSC Testnet
-
-💵 Current Prices:
-ETH: $1.00
-BNB: $1.00
-
-Total Value: ~$0.01
-
-? Do you want to proceed with this swap? Yes
-
-🔄 Executing Cross-Chain Swap...
+#### 1. Copy the example file:
+```bash
+cp .env.example .env
 ```
 
-## Token Support
+#### 2. Fill in your own values in `.env`:
 
-### Sepolia Testnet
-- **ETH** (Native): Automatically wrapped to WETH
-- **WETH** (ERC-20): Wrapped Ethereum
-- **USDC** (ERC-20): USD Coin
+**EVM Keys (Required):**
+- `BUYER_PRIVATE_KEY=your_evm_buyer_private_key`
+- `RESOLVER_PRIVATE_KEY=your_evm_resolver_private_key`
 
-### BSC Testnet
-- **BNB** (Native): Automatically wrapped to WBNB
-- **WBNB** (BEP-20): Wrapped BNB
-- **USDT** (BEP-20): Tether USD
+**Stellar Keys (Required):**
+- `STELLAR_BUYER_SECRET=your_stellar_buyer_secret_key`
+- `STELLAR_RESOLVER_SECRET=your_stellar_resolver_secret_key`
+- `STELLAR_BUYER_ADDRESS=your_stellar_buyer_public_address`
+- `STELLAR_RESOLVER_ADDRESS=your_stellar_resolver_public_address`
 
-## Configuration
+**Important:** Make sure your wallets have testnet funds:
+- Sepolia ETH for gas fees
+- Stellar XLM for transaction fees
 
-### Chain Configuration (`config/chains.json`)
+**Contract Addresses:**
 
-Update this file to:
-- Add new chains
-- Update factory contract addresses after deployment
-- Add new token addresses
-- Modify RPC URLs
+**Sepolia Testnet:**
+- Factory: `0x4F25B17649F0A056138E251487c27A22D793DBA7`
+- LOP: `0x13F4118A0C9AA013eeB078f03318aeea84469cDD`
 
-### Price Service (`src/price-service.ts`)
+**Stellar Testnet:**
+- Factory: `CD3TAVDMTRSPT475FP2APSC3MRQFOHVKEMJYPUGGQRP3KS4B5UBPCFH6`
+- LOP: `CCFLX4NZH4MVTQ5DYO74LEB3S7U2GO6OH3VP4NPYF4CXXSXR4GPRXEXV`
 
-Currently in testing mode with 1:1 prices. To enable real prices:
-1. Uncomment the CoinGecko API code
-2. Comment out the testing mode sections
+**Token Addresses:**
 
-## Swap Process
+**Sepolia Testnet:**
+- ETH (Native): `0x0000000000000000000000000000000000000000`
+- WETH: `0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9`
+- USDC: `0x94a9D9AC8a22534E3FaCa9F4e7F2E2cf85d5E4C8`
 
-1. **Buyer Preparation**:
-   - Wraps native tokens if needed
-   - Approves factory contract to spend tokens
+**Stellar Testnet:**
+- XLM (Native): `CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC`
+- USDC: `CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA`
 
-2. **Resolver Execution**:
-   - Creates source escrow (pulls buyer's tokens)
-   - Wraps destination tokens if needed
-   - Creates destination escrow
-   - Waits for withdrawal window
-   - Executes both withdrawals simultaneously
+**Supported Chains:**
+- Sepolia Testnet (ETH, WETH, USDC)
+- Stellar Testnet (XLM, USDC)
 
-3. **Completion**:
-   - Buyer receives destination tokens (unwrapped to native)
-   - Resolver receives source tokens (unwrapped to native)
+---
 
-## Gas Optimization
+## How Dynamic-Swap.ts Works
 
-The interface uses optimized gas settings:
-- **Sepolia**: 150k gas limit, 15 gwei max fee
-- **BSC**: 150k gas limit, 2 gwei gas price
+### Main Features
 
-## Error Handling
+#### 1. HashLock & Timelocks (**lines 7, 116-122**)
+- **Secret-based coordination**: Uses cryptographic secrets where revealing one unlocks both escrows atomically
+- **Multi-tier time windows**: withdrawal_start (resolver priority) → public_withdrawal_start (anyone with secret) → cancellation_start (fund recovery)
+- **Cross-chain synchronization**: Same hashlock coordinates escrows on both Stellar and EVM chains
 
-- Automatic fallback for price fetching failures
-- Manual amount entry if API is unavailable
-- Comprehensive error messages for troubleshooting
+```typescript
+import { HashLock, PartialFillOrderManager } from "./hash-lock";
+this.stellarBuyerKeypair = Keypair.fromSecret(process.env.STELLAR_BUYER_SECRET);
+this.stellarResolverKeypair = Keypair.fromSecret(process.env.STELLAR_RESOLVER_SECRET);
+```
 
-## Development
+#### 2. Atomic Execution (**line 1156+**)
+- **Two-phase escrow creation**: Source escrow locks buyer tokens, destination escrow locks resolver tokens
+- **All-or-nothing guarantee**: Either both parties get tokens or both transactions fail
+- **Coordinated withdrawal**: Revealing secret to claim from one escrow enables claiming from the other
 
-### Add New Chain
+#### 3. EVM LOP Contract Integration (**lines 12, 48**)
+- **Order filling on EVM side**: Calls fillOrder function of LOP contract for order execution
+- **Token approval handling**: Manages ERC-20 approvals before LOP contract interaction
+- **Gas optimization**: Uses efficient gas settings for EVM transactions
 
-1. Update `config/chains.json` with chain details
-2. Deploy factory contract to new chain
-3. Update factory address in config
-4. Add token addresses for the new chain
+```typescript
+"lopAddress": "0x13F4118A0C9AA013eeB078f03318aeea84469cDD", // Sepolia LOP
+"lopAddress": "CCFLX4NZH4MVTQ5DYO74LEB3S7U2GO6OH3VP4NPYF4CXXSXR4GPRXEXV" // Stellar LOP
+```
 
-### Add New Token
+### Stellar to EVM Flow
 
-1. Add token details to appropriate chain in `config/chains.json`
-2. Update `TOKEN_ID_MAP` in `src/price-service.ts` if using real prices
+#### Order Creation (**lines 697-706**)
+- **Dynamic function selection**: Uses `create_src_escrow` for single fills, `create_src_escrow_partial` for partial fills
+- **Comprehensive parameters**: Includes creator, hashed_secret, recipient, buyer, token_amount, and time windows
+- **Soroban CLI integration**: Executes Stellar contract calls via command-line interface
 
-## Scripts
+```typescript
+const functionName = (actualPartIndex > 0 || actualTotalParts > 1) ? 'create_src_escrow_partial' : 'create_src_escrow';
+command = `soroban contract invoke --id ${contractAddress} --source stellar-resolver --network testnet -- ${functionName}`;
+```
 
-- `npm run build`: Compile TypeScript
-- `npm run swap`: Run the dynamic swap interface
-- `npm test`: Run tests (placeholder)
+#### Secret Management (**lines 350, 475**)
+- **Single secret for simple orders**: Uses main order secret for straightforward swaps
+- **Consistent hash generation**: Same secret generates identical hashlocks across chains
+- **Security through revelation timing**: Secret only revealed during withdrawal phase
 
-## Troubleshooting
+#### Order Tracking (**lines 1399-1425**)
+- **Remaining parts counter**: Tracks `remainingParts: segments.length` and decrements as filled
+- **Amount monitoring**: Updates `fillStatus.totalFilledAmount` for partial completion tracking
+- **Status management**: Maintains order state throughout multi-step execution
 
-1. **"Insufficient funds"**: Ensure accounts have enough native tokens for gas
-2. **"Contract not deployed"**: Verify factory addresses in config
-3. **"Price fetch failed"**: Interface will fallback to manual entry
-4. **"Transaction reverted"**: Check time windows and token approvals 
+### EVM to Stellar Flow
+
+#### Destination Escrow (**lines 627-636**)
+- **Mirror escrow logic**: Uses `create_dst_escrow` or `create_dst_escrow_partial` based on order type
+- **Resolver commitment**: Locks resolver's tokens on Stellar before buyer commits EVM tokens
+- **Identical timelock parameters**: Uses same time windows for coordinated execution
+
+```typescript
+const functionName = (actualPartIndex > 0 || actualTotalParts > 1) ? 'create_dst_escrow_partial' : 'create_dst_escrow';
+command = `soroban contract invoke --id ${contractAddress} --source stellar-resolver --network testnet -- ${functionName}`;
+```
+
+#### Secret Coordination (**lines 383, 570**)
+- **Unified secret management**: Same approach as Stellar→EVM for consistency
+- **Cross-chain hashlock**: Identical secret coordinates both Stellar and EVM escrows
+- **Atomic revelation**: Unlocking one chain automatically enables unlocking the other
+
+#### LOP Contract Execution
+- **EVM-side order filling**: Executes fillOrder on LOP contract for EVM portion of swap
+- **Token transfer coordination**: Manages ERC-20 transfers through LOP contract
+- **Fee and slippage handling**: LOP contract manages pricing and execution parameters
+
+### Partial Fill Cases
+
+#### Secret Architecture (**lines 1248-1256**)
+- **Multiple secret management**: `PartialFillOrderManager` handles array of secrets for segments
+- **Master secret derivation**: All segment secrets derived from common source for coordination
+- **Backward compatibility**: First secret serves as main order secret for existing logic
+
+```typescript
+if (config.partsCount && config.partsCount > 1) {
+  partialFillManager = new PartialFillOrderManager(config.partsCount!);
+  hashedSecret = partialFillManager.getHashLock();
+}
+```
+
+#### Progress Monitoring (**lines 1479-1496, 1531**)
+- **Segment completion tracking**: Decrements `fillStatus.remainingParts` as segments finish
+- **Amount aggregation**: Sums filled amounts across all completed segments
+- **Real-time display**: Shows remaining unfilled amounts in readable format
+
+```typescript
+fillStatus.remainingParts--;
+console.log(`Remaining: ${ethers.utils.formatUnits(order.srcAmount.sub(fillStatus.totalFilledAmount))}`);
+```
+
+#### Independent Segment Execution
+- **Parallel processing capability**: Each segment can be filled independently with own secret
+- **Isolated failure handling**: One segment failure doesn't affect others
+- **Coordinated completion**: All segments must complete for full order fulfillment
+
+### Resolver Execution Flow
+
+#### Application Entry (**lines 2480-2501**)
+- **Clean initialization**: Creates `DynamicSwapInterface` instance and starts execution
+- **Error handling**: Catches and reports application-level errors with proper exit codes
+- **Lifecycle management**: Ensures clean shutdown on completion or failure
+
+```typescript
+async function main() {
+  const swapInterface = new DynamicSwapInterface();
+  await swapInterface.start();
+}
+```
+
+#### Stellar Integration (**lines 113-126**)
+- **SDK connection**: Initializes `SorobanRpc.Server` for Stellar testnet interactions
+- **Keypair management**: Loads buyer and resolver keypairs from environment variables
+- **Fallback handling**: Uses hardcoded addresses if environment setup fails
+
+```typescript
+this.stellarServer = new SorobanRpc.Server('https://soroban-testnet.stellar.org:443');
+this.stellarBuyerKeypair = Keypair.fromSecret(process.env.STELLAR_BUYER_SECRET);
+```
+
+#### Balance Monitoring (**lines 174-194**)
+- **Cross-chain awareness**: Tracks balances on both Stellar and EVM networks simultaneously
+- **Real-time updates**: Displays current wallet states before and after transactions
+- **Address format handling**: Manages different address formats between Stellar and EVM chains
