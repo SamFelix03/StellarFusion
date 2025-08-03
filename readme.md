@@ -1,4 +1,6 @@
-# StellarFusion: Cross-Chain Atomic Swap Platform
+# StellarFusion: An Intent-Based Cross-Chain Atomic Swap Platform
+<img width="1024" height="1024" alt="589860EB-794D-42CB-938B-53355DF79665" src="https://github.com/user-attachments/assets/a821ff01-fadd-4327-804f-972fdd36bc91" />
+
 
 ## Table of Contents
 
