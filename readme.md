@@ -1,4 +1,4 @@
-<img width="1115" height="580" alt="state2" src="https://github.com/user-attachments/assets/cf255909-8a02-47e2-84ef-b87b773d8ad5" /><img width="1115" height="580" alt="state2" src="https://github.com/user-attachments/assets/7c593662-7599-44c1-a290-a89e4592ce84" /># StellarFusion: An Intent-Based Cross-Chain Atomic Swap Platform
+# StellarFusion: An Intent-Based Cross-Chain Atomic Swap Platform
 <img width="1024" height="1024" alt="589860EB-794D-42CB-938B-53355DF79665" src="https://github.com/user-attachments/assets/a821ff01-fadd-4327-804f-972fdd36bc91" />
 
 
