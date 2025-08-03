@@ -12,6 +12,7 @@ import {
   Users,
   Wallet,
   Star,
+  Terminal,
 } from "lucide-react"
 import Dither from "./components/Dither"
 import { useWallet } from "./components/WalletProvider"
@@ -220,9 +221,42 @@ export default function LandingPage({
                   <ArrowRight className="w-5 h-5 ml-2" />
                 </Button>
               </motion.div>
+
+              <motion.div
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
+              >
+                <Button
+                  size="lg"
+                  variant="outline"
+                  className="border-white/20 text-white hover:bg-white/10 hover:text-white backdrop-blur-sm font-bold text-lg px-8 py-4 h-auto bg-transparent"
+                  onClick={() => window.open('https://github.com/SamFelix03/StellarFusion/blob/master/DYNAMIC-SWAP-GUIDE.md', '_blank')}
+                >
+                  <Terminal className="w-5 h-5 mr-2" />
+                  CLI Demo
+                  <ArrowRight className="w-5 h-5 ml-2" />
+                </Button>
+              </motion.div>
             </div>
           </motion.div>
         </div>
+
+        {/* Disclaimer Footer */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.8, delay: 0.5 }}
+          className="px-8 pb-8"
+        >
+          <div className="max-w-4xl mx-auto text-center">
+            <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-xl p-6">
+              <p className="text-sm text-white/60">
+                <span className="text-yellow-400 font-medium">⚠️ Note:</span> For testing partial fills, please use the CLI Demo above. 
+                The frontend implementation has some known bugs with partial fill functionality.
+              </p>
+            </div>
+          </div>
+        </motion.div>
       </div>
     </div>
   )
