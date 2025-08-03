@@ -147,6 +147,23 @@ class DynamicSwapInterface {
     return this.chains[chainKey]?.isStellar === true;
   }
 
+  private getExplorerLink(chainKey: string, txHash: string): string {
+    if (this.isStellarChain(chainKey)) {
+      return `https://stellar.expert/explorer/testnet/tx/${txHash}`;
+    } else if (chainKey === 'sepolia' || chainKey === 'ethereum-sepolia') {
+      return `https://sepolia.etherscan.io/tx/${txHash}`;
+    } else if (chainKey === 'ethereum' || chainKey === 'mainnet') {
+      return `https://etherscan.io/tx/${txHash}`;
+    }
+    return `Unknown chain: ${chainKey}`;
+  }
+
+  private logTransactionSuccess(chainKey: string, txHash: string, description: string = "Transaction") {
+    const explorerLink = this.getExplorerLink(chainKey, txHash);
+    console.log(`✅ ${description}: ${txHash}`);
+    console.log(`🔗 Explorer: ${explorerLink}`);
+  }
+
   private getStellarAddresses() {
     return {
       buyer: process.env.STELLAR_BUYER_ADDRESS || "",
@@ -154,58 +171,116 @@ class DynamicSwapInterface {
     };
   }
 
-  private async executeStellarSwap(config: SwapConfig, isSrcStellar: boolean, isDstStellar: boolean) {
-    console.log("\n🌟 STELLAR CROSS-CHAIN SWAP");
-    console.log("============================");
+  private async displayWalletBalances(title: string, config: SwapConfig) {
+    console.log(`\n💰 ${title}`);
+    console.log("━".repeat(50));
     
     const stellarAddresses = this.getStellarAddresses();
-    console.log(`Stellar Buyer: ${stellarAddresses.buyer}`);
-    console.log(`Stellar Resolver: ${stellarAddresses.resolver}`);
+    const isSrcStellar = this.isStellarChain(config.sourceChain);
+    const isDstStellar = this.isStellarChain(config.destinationChain);
     
-    // Generate order with proper buyer address
+    // Get EVM wallet addresses
+    const buyerEthAddress = new ethers.Wallet(this.buyerPrivateKey).address;
+    const resolverEthAddress = new ethers.Wallet(this.resolverPrivateKey).address;
+    
+    // Display Buyer Balances
+    console.log(`\n👤 Buyer:`);
+    
+    // Buyer ETH Balance
+    if (!isSrcStellar || !isDstStellar) {
+      try {
+        const chainKey = isSrcStellar ? config.destinationChain : config.sourceChain;
+        const provider = new ethers.providers.JsonRpcProvider(this.chains[chainKey].rpcUrl);
+        const ethBalance = await provider.getBalance(buyerEthAddress);
+        console.log(`   ETH (${chainKey}): ${ethers.utils.formatEther(ethBalance)} ETH`);
+      } catch (error) {
+        console.log(`   ETH: Unable to fetch balance`);
+      }
+    }
+    
+    // Buyer Stellar Balance
+    try {
+      const response = await fetch(`https://horizon-testnet.stellar.org/accounts/${stellarAddresses.buyer}`);
+      if (response.ok) {
+        const accountData = await response.json() as any;
+        const xlmBalance = accountData.balances?.find((balance: any) => balance.asset_type === 'native');
+        const balanceXLM = xlmBalance ? parseFloat(xlmBalance.balance) : 0;
+        console.log(`   XLM (Stellar): ${balanceXLM.toFixed(7)} XLM`);
+      } else {
+        console.log(`   XLM (Stellar): Unable to fetch balance`);
+      }
+    } catch (error) {
+      console.log(`   XLM (Stellar): Unable to fetch balance`);
+    }
+    
+    // Display Resolver Balances
+    console.log(`\n🔧 Resolver:`);
+    
+    // Resolver ETH Balance
+    if (!isSrcStellar || !isDstStellar) {
+      try {
+        const chainKey = isSrcStellar ? config.destinationChain : (isDstStellar ? config.sourceChain : config.destinationChain);
+        const provider = new ethers.providers.JsonRpcProvider(this.chains[chainKey].rpcUrl);
+        const ethBalance = await provider.getBalance(resolverEthAddress);
+        console.log(`   ETH (${chainKey}): ${ethers.utils.formatEther(ethBalance)} ETH`);
+      } catch (error) {
+        console.log(`   ETH: Unable to fetch balance`);
+      }
+    }
+    
+    // Resolver Stellar Balance
+    try {
+      const response = await fetch(`https://horizon-testnet.stellar.org/accounts/${stellarAddresses.resolver}`);
+      if (response.ok) {
+        const accountData = await response.json() as any;
+        const xlmBalance = accountData.balances?.find((balance: any) => balance.asset_type === 'native');
+        const balanceXLM = xlmBalance ? parseFloat(xlmBalance.balance) : 0;
+        console.log(`   XLM (Stellar): ${balanceXLM.toFixed(7)} XLM`);
+      } else {
+        console.log(`   XLM (Stellar): Unable to fetch balance`);
+      }
+    } catch (error) {
+      console.log(`   XLM (Stellar): Unable to fetch balance`);
+    }
+    
+    console.log("━".repeat(50));
+  }
+
+  private async executeStellarSwap(config: SwapConfig, isSrcStellar: boolean, isDstStellar: boolean) {
+    console.log("\n🔄 StellarFusion Cross-Chain Swap");
+    
+    const stellarAddresses = this.getStellarAddresses();
     const buyerAddress = isSrcStellar ? stellarAddresses.buyer : 
                         new ethers.Wallet(this.buyerPrivateKey).address;
     const order = await this.createOrder(config, buyerAddress);
     
-    console.log("\n📋 Order Details:");
-    console.log(`Order ID: ${order.orderId}`);
-    console.log(`Source Chain: ${config.sourceChain} ${isSrcStellar ? '(Stellar)' : '(EVM)'}`);
-    console.log(`Destination Chain: ${config.destinationChain} ${isDstStellar ? '(Stellar)' : '(EVM)'}`);
-    console.log(`Amount: ${config.sourceAmount} ${config.sourceToken} → ${config.destinationAmount} ${config.destinationToken}`);
-    console.log(`Secret: ${order.secret}`);
-    console.log(`Hashed Secret: ${order.hashedSecret}`);
+    const swapType = isSrcStellar && isDstStellar ? "Stellar ↔ Stellar" : 
+                    isSrcStellar ? "Stellar → EVM" : "EVM → Stellar";
+    
+    console.log(`\n📋 ${swapType} | ${config.sourceAmount} ${config.sourceToken} → ${config.destinationAmount} ${config.destinationToken}`);
+    console.log(`🆔 Order: ${order.orderId}`);
     
     if (isSrcStellar && isDstStellar) {
-      console.log("\n🔄 STELLAR ↔ STELLAR SWAP");
       await this.executeStellarToStellarSwap(config, order);
     } else if (isSrcStellar) {
-      console.log("\n🔄 STELLAR → EVM SWAP");
       await this.executeStellarToEvmSwap(config, order);
     } else if (isDstStellar) {
-      console.log("\n🔄 EVM → STELLAR SWAP");
       await this.executeEvmToStellarSwap(config, order);
     }
     
-    console.log("\n🎉 Stellar Cross-Chain Swap Process Completed!");
-    console.log("==============================================");
+    console.log("\n✅ Swap completed");
   }
 
   private async executeStellarToStellarSwap(config: SwapConfig, order: Order) {
-    console.log("\n🔧 STELLAR → STELLAR SWAP EXECUTION");
-    console.log("-----------------------------------");
+    console.log("\n[1/6] Executing Stellar ↔ Stellar swap");
     
     const stellarAddresses = this.getStellarAddresses();
     
-    // Step 1: Prepare buyer on Stellar source chain
-    console.log(`\n📝 Step 1: Prepare buyer on Stellar source chain`);
+    console.log(`[2/6] Preparing participants`);
     await this.prepareStellarBuyer(config, order);
-    
-    // Step 2: Prepare resolver on Stellar destination chain  
-    console.log(`\n📝 Step 2: Prepare resolver on Stellar destination chain`);
     await this.prepareStellarResolver(config, order);
     
-    // Step 3: Create source escrow on Stellar
-    console.log(`\n📝 Step 3: Create source escrow on Stellar`);
+    console.log(`[3/6] Creating source escrow`);
     const stellarSrcResult = await this.createStellarSourceEscrow(
       stellarAddresses.resolver, // creator (resolver)
       stellarAddresses.resolver, // recipient (resolver)
@@ -224,8 +299,7 @@ class DynamicSwapInterface {
       return;
     }
     
-    // Step 4: Create destination escrow on Stellar
-    console.log(`\n📝 Step 4: Create destination escrow on Stellar`);
+    console.log(`[4/6] Creating destination escrow`);
     const stellarDstResult = await this.createStellarDestinationEscrow(
       stellarAddresses.resolver, // creator (resolver)
       stellarAddresses.buyer, // recipient (buyer)
@@ -243,18 +317,16 @@ class DynamicSwapInterface {
       return;
     }
     
-    // Step 5: Wait for withdrawal window
-    console.log(`\n📝 Step 5: Wait for withdrawal window`);
+    console.log(`[5/6] Waiting for withdrawal window`);
     const currentTime = Math.floor(Date.now() / 1000);
     const timeToWait = order.withdrawalStart - currentTime;
     
     if (timeToWait > 0) {
-      console.log(`⏳ Waiting ${timeToWait} seconds for withdrawal window...`);
+      console.log(`Waiting ${timeToWait}s for withdrawal window`);
       await new Promise(resolve => setTimeout(resolve, timeToWait * 1000));
     }
     
-    // Step 6: Execute withdrawals
-    console.log(`\n📝 Step 6: Execute Stellar source escrow withdrawal (resolver gets source tokens)`);
+    console.log(`[6/6] Executing source withdrawal`);
     
     let srcWithdrawal;
     if (order.isPartialFillEnabled && order.partialFillManager) {
@@ -287,7 +359,7 @@ class DynamicSwapInterface {
     }
     
     if (srcWithdrawal.success) {
-      console.log(`\n📝 Step 7: Execute Stellar destination escrow withdrawal (buyer gets destination tokens)`);
+      console.log(`[6/6] Executing destination withdrawal`);
       
       let dstWithdrawal;
       if (order.isPartialFillEnabled && order.partialFillManager) {
@@ -320,11 +392,9 @@ class DynamicSwapInterface {
       }
       
       if (dstWithdrawal.success) {
-        console.log("\n🎉 STELLAR ↔ STELLAR SWAP COMPLETED SUCCESSFULLY!");
-        console.log("===============================================");
-        console.log(`✅ Buyer received ${config.destinationAmount} ${config.destinationToken} on Stellar`);
-        console.log(`✅ Resolver received ${config.sourceAmount} ${config.sourceToken} on Stellar`);
-        console.log(`🔗 Both used SHA256 hashing for cross-chain compatibility`);
+        console.log("\n✅ Stellar ↔ Stellar swap completed successfully");
+        console.log(`   Buyer: ${config.destinationAmount} ${config.destinationToken}`);
+        console.log(`   Resolver: ${config.sourceAmount} ${config.sourceToken}`);
       } else {
         console.log(`❌ Stellar destination withdrawal failed: ${dstWithdrawal.error}`);
       }
@@ -332,24 +402,18 @@ class DynamicSwapInterface {
       console.log(`❌ Stellar source withdrawal failed: ${srcWithdrawal.error}`);
     }
     
-    console.log("\n✅ Stellar → Stellar swap execution completed!");
+    console.log("\n✅ Stellar → Stellar execution completed");
   }
 
   private async executeStellarToEvmSwap(config: SwapConfig, order: Order) {
-    console.log("\n🔧 STELLAR → EVM SWAP EXECUTION");
-    console.log("-------------------------------");
+    console.log("\n[1/6] Executing Stellar → EVM swap");
     
     const stellarAddresses = this.getStellarAddresses();
     
-    // Step 1: Prepare buyer on Stellar source chain
-    console.log(`\n📝 Step 1: Prepare buyer on Stellar source chain`);
+    console.log(`[2/6] Preparing buyer on Stellar`);
     await this.prepareStellarBuyer(config, order);
     
-    // Step 2: Create source escrow on Stellar
-    console.log(`\n📝 Step 2: Create source escrow on Stellar`);
-    console.log(`   Stellar Factory: ${this.chains['stellar-testnet']?.factoryAddress}`);
-    console.log(`   Buyer: ${stellarAddresses.buyer}`);
-    console.log(`   Amount: ${config.sourceAmount} ${config.sourceToken}`);
+    console.log(`[3/6] Creating source escrow on Stellar`);
     
     const stellarSrcResult = await this.createStellarSourceEscrow(
       stellarAddresses.resolver, // creator (resolver)
@@ -369,9 +433,7 @@ class DynamicSwapInterface {
       return;
     }
     
-    // Step 3: Create destination escrow on EVM
-    console.log(`\n📝 Step 3: Create destination escrow on EVM (${config.destinationChain})`);
-    console.log(`   EVM Factory: ${this.chains[config.destinationChain].factoryAddress}`);
+    console.log(`[4/6] Creating destination escrow on ${config.destinationChain}`);
     
     const dstProvider = new ethers.providers.JsonRpcProvider(this.chains[config.destinationChain].rpcUrl);
     const dstSigner = new ethers.Wallet(this.resolverPrivateKey, dstProvider);
@@ -379,9 +441,7 @@ class DynamicSwapInterface {
     
     const evmDstEscrowAddress = await this.createEvmDestinationEscrow(config, order, dstSigner, buyerAddress);
     
-    // Step 4: Wait for withdrawal window and execute swaps
-    console.log(`\n📝 Step 4: Wait for withdrawal window and execute swaps`);
-    console.log(`   Withdrawal starts at: ${new Date(order.withdrawalStart * 1000).toLocaleString()}`);
+    console.log(`[5/6] Waiting for withdrawal window`);
     
     const currentTime = Math.floor(Date.now() / 1000);
     const timeToWait = order.withdrawalStart - currentTime;
@@ -391,8 +451,7 @@ class DynamicSwapInterface {
       await new Promise(resolve => setTimeout(resolve, timeToWait * 1000));
     }
     
-    // Step 5: Execute Stellar withdrawal first (resolver gets source tokens)
-    console.log(`\n📝 Step 5: Execute Stellar source escrow withdrawal`);
+    console.log(`[6/6] Executing Stellar withdrawal`);
     
     let stellarWithdrawal;
     if (order.isPartialFillEnabled && order.partialFillManager) {
@@ -425,24 +484,21 @@ class DynamicSwapInterface {
     }
     
     if (stellarWithdrawal.success) {
-      // Step 6: Execute EVM withdrawal (buyer gets destination tokens)
-      console.log(`\n📝 Step 6: Execute EVM destination escrow withdrawal`);
+      console.log(`[6/6] Executing EVM withdrawal`);
       await this.withdrawFromEvmEscrow(evmDstEscrowAddress, order.secret, dstSigner);
       
-      console.log("\n🎉 CROSS-CHAIN SWAP COMPLETED SUCCESSFULLY!");
-      console.log("==============================================");
-      console.log(`✅ Buyer received ${config.destinationAmount} ${config.destinationToken} on EVM`);
-      console.log(`✅ Resolver received ${config.sourceAmount} ${config.sourceToken} on Stellar`);
+      console.log("\n✅ Cross-chain swap completed successfully");
+      console.log(`   Buyer: ${config.destinationAmount} ${config.destinationToken} on EVM`);
+      console.log(`   Resolver: ${config.sourceAmount} ${config.sourceToken} on Stellar`);
     } else {
       console.log(`❌ Stellar withdrawal failed: ${stellarWithdrawal.error}`);
     }
     
-    console.log("\n✅ Stellar → EVM swap execution completed!");
+    console.log("\n✅ Stellar → EVM execution completed");
   }
 
   private async executeEvmToStellarSwap(config: SwapConfig, order: Order) {
-    console.log("\n🔧 EVM → STELLAR SWAP EXECUTION");
-    console.log("-------------------------------");
+    console.log("\n[1/7] Executing EVM → Stellar swap");
     
     const stellarAddresses = this.getStellarAddresses();
     
@@ -451,29 +507,18 @@ class DynamicSwapInterface {
     const buyerSigner = new ethers.Wallet(this.buyerPrivateKey, srcProvider);
     const resolverSigner = new ethers.Wallet(this.resolverPrivateKey, srcProvider);
     
-    // Step 1: Prepare buyer on EVM source chain
-    console.log(`\n📝 Step 1: Prepare buyer on EVM (${config.sourceChain})`);
-    console.log(`   Buyer: ${buyerSigner.address}`);
-    console.log(`   Amount: ${config.sourceAmount} ${config.sourceToken}`);
+    console.log(`[2/7] Preparing buyer on ${config.sourceChain}`);
     
     await this.prepareBuyer(config, buyerSigner, order);
 
-    // Step 2: Prepare resolver on Stellar destination chain
-    console.log(`\n📝 Step 2: Prepare resolver on Stellar destination chain`);
+    console.log(`[3/7] Preparing resolver on Stellar`);
     await this.prepareStellarResolver(config, order);
 
-    // Step 3: Create source escrow on EVM
-    console.log(`\n📝 Step 3: Create source escrow on EVM`);
-    console.log(`   EVM Factory: ${this.chains[config.sourceChain].factoryAddress}`);
+    console.log(`[4/7] Creating source escrow on EVM`);
     
     await this.executeSourceEscrowOnly(config, order, resolverSigner);
 
-    // Step 4: Create destination escrow on Stellar
-    console.log(`\n📝 Step 4: Create destination escrow on Stellar`);
-    console.log(`   Stellar Factory: ${this.chains['stellar-testnet']?.factoryAddress}`);
-    console.log(`   Resolver: ${stellarAddresses.resolver}`);
-    console.log(`   Recipient: ${stellarAddresses.buyer}`);
-    console.log(`   Amount: ${config.destinationAmount} ${config.destinationToken}`);
+    console.log(`[5/7] Creating destination escrow on Stellar`);
     
     const stellarResult = await this.createStellarDestinationEscrow(
       stellarAddresses.resolver,
@@ -488,25 +533,20 @@ class DynamicSwapInterface {
     );
     
     if (stellarResult.success) {
-      // Step 5: Wait for withdrawal window and execute atomic swap
-      console.log(`\n📝 Step 5: Execute cross-chain atomic swap`);
-      console.log(`   Secret will be revealed on Stellar and used to withdraw from EVM`);
-      console.log(`   Withdrawal starts at: ${new Date(order.withdrawalStart * 1000).toLocaleString()}`);
+      console.log(`[6/7] Waiting for withdrawal window`);
       
       const currentTime = Math.floor(Date.now() / 1000);
       const timeToWait = order.withdrawalStart - currentTime;
       
       if (timeToWait > 0) {
-        console.log(`\n⏳ Waiting ${timeToWait} seconds for withdrawal window...`);
+        console.log(`Waiting ${timeToWait}s for withdrawal window`);
         await new Promise(resolve => setTimeout(resolve, timeToWait * 1000));
       }
       
-      // Step 6: Execute EVM withdrawal first (resolver gets the source tokens)
-      console.log(`\n📝 Step 6: Execute EVM source escrow withdrawal`);
+      console.log(`[7/7] Executing EVM withdrawal`);
       await this.withdrawFromEvmEscrow(order.srcEscrowAddress!, order.secret, resolverSigner);
       
-      // Step 7: Execute Stellar withdrawal (buyer gets destination tokens)
-      console.log(`\n📝 Step 7: Execute Stellar destination escrow withdrawal`);
+      console.log(`[7/7] Executing Stellar withdrawal`);
       
       let withdrawalResult;
       if (order.isPartialFillEnabled && order.partialFillManager) {
@@ -539,11 +579,9 @@ class DynamicSwapInterface {
       }
       
       if (withdrawalResult.success) {
-        console.log("\n🎉 CROSS-CHAIN SWAP COMPLETED SUCCESSFULLY!");
-        console.log("==============================================");
-        console.log(`✅ Buyer received ${config.destinationAmount} ${config.destinationToken} on Stellar`);
-        console.log(`✅ Resolver received ${config.sourceAmount} ${config.sourceToken} on EVM`);
-        console.log(`🔗 Both chains used SHA256 hashing for cross-chain compatibility`);
+        console.log("\n✅ Cross-chain swap completed successfully");
+        console.log(`   Buyer: ${config.destinationAmount} ${config.destinationToken} on Stellar`);
+        console.log(`   Resolver: ${config.sourceAmount} ${config.sourceToken} on EVM`);
       } else {
         console.log(`❌ Stellar withdrawal failed: ${withdrawalResult.error}`);
       }
@@ -551,7 +589,7 @@ class DynamicSwapInterface {
       console.log(`❌ Stellar destination escrow creation failed: ${stellarResult.error}`);
     }
     
-    console.log("\n✅ EVM → Stellar swap execution completed!");
+    console.log("\n✅ EVM → Stellar execution completed");
   }
 
   // Stellar contract interaction methods
@@ -566,7 +604,7 @@ class DynamicSwapInterface {
     partIndex?: number,
     totalParts?: number
   ) {
-    console.log(`\n🌟 Creating Stellar Destination Escrow...`);
+    console.log(`Creating Stellar destination escrow`);
     
     try {
 
@@ -582,16 +620,6 @@ class DynamicSwapInterface {
       const actualPartIndex = partIndex || 0;
       const actualTotalParts = totalParts || 1;
       
-      console.log("🔍 Debug - Parameters being passed:");
-      console.log(`  creator: ${creator}`);
-      console.log(`  hashed_secret: ${hashedSecret}`);
-      console.log(`  recipient: ${recipient}`);
-      console.log(`  token_amount: ${amountInStroops} (${amount} XLM)`);
-      console.log(`  withdrawal_start: ${withdrawalStart}`);
-      console.log(`  public_withdrawal_start: ${publicWithdrawalStart}`);
-      console.log(`  cancellation_start: ${cancellationStart}`);
-      console.log(`  part_index: ${actualPartIndex}`);
-      console.log(`  total_parts: ${actualTotalParts}`);
       
       // Use CLI approach instead of SDK for better compatibility
       const { execSync } = require('child_process');
@@ -608,18 +636,21 @@ class DynamicSwapInterface {
         command = `soroban contract invoke --id ${contractAddress} --source stellar-resolver --network testnet -- ${functionName} --creator ${creator} --hashed_secret ${hashedSecret.slice(2)} --recipient ${recipient} --token_amount ${amountInStroops} --withdrawal_start ${withdrawalStart} --public_withdrawal_start ${publicWithdrawalStart} --cancellation_start ${cancellationStart}`;
       }
       
-      console.log("📤 Executing CLI command...");
-      console.log(`Command: ${command}`);
-      
       const result = execSync(command, { encoding: 'utf8' });
       
-      console.log("✅ Stellar destination escrow created successfully!");
-      console.log(`📋 Result: ${result.trim()}`);
+      // Extract transaction hash from CLI output if available
+      const txHashMatch = result.match(/(?:hash|tx|transaction)[:=]\s*([a-fA-F0-9]{64})/i);
+      const txHash = txHashMatch ? txHashMatch[1] : result.trim().replace(/"/g, '').slice(0, 64);
+      
+      console.log("✅ Stellar destination escrow created");
+      if (txHash && txHash.length === 64) {
+        console.log(`🔗 Explorer: https://stellar.expert/explorer/testnet/tx/${txHash}`);
+      }
       
       return {
         success: true,
         escrowAddress: result.trim().replace(/"/g, ''),
-        transactionHash: 'CLI_SUCCESS',
+        transactionHash: txHash || 'CLI_SUCCESS',
         message: 'Destination escrow created successfully'
       };
       
@@ -644,7 +675,7 @@ class DynamicSwapInterface {
     partIndex?: number,
     totalParts?: number
   ) {
-    console.log(`\n🌟 Creating Stellar Source Escrow...`);
+    console.log(`Creating Stellar source escrow`);
     
     try {
       const contractAddress = this.chains['stellar-testnet']?.factoryAddress;
@@ -659,18 +690,6 @@ class DynamicSwapInterface {
       const actualPartIndex = partIndex || 0;
       const actualTotalParts = totalParts || 1;
       
-      console.log("🔍 Debug - Parameters being passed:");
-      console.log(`  creator: ${creator}`);
-      console.log(`  hashed_secret: ${hashedSecret}`);
-      console.log(`  recipient: ${recipient}`);
-      console.log(`  buyer: ${stellarAddresses.buyer}`);
-      console.log(`  token_amount: ${amountInStroops} (${amount} XLM)`);
-      console.log(`  withdrawal_start: ${withdrawalStart}`);
-      console.log(`  public_withdrawal_start: ${publicWithdrawalStart}`);
-      console.log(`  cancellation_start: ${cancellationStart}`);
-      console.log(`  public_cancellation_start: ${publicCancellationStart}`);
-      console.log(`  part_index: ${actualPartIndex}`);
-      console.log(`  total_parts: ${actualTotalParts}`);
       
       // Use CLI approach for better compatibility
       const { execSync } = require('child_process');
@@ -687,18 +706,21 @@ class DynamicSwapInterface {
         command = `soroban contract invoke --id ${contractAddress} --source stellar-resolver --network testnet -- ${functionName} --creator ${creator} --hashed_secret ${hashedSecret.slice(2)} --recipient ${recipient} --buyer ${stellarAddresses.buyer} --token_amount ${amountInStroops} --withdrawal_start ${withdrawalStart} --public_withdrawal_start ${publicWithdrawalStart} --cancellation_start ${cancellationStart} --public_cancellation_start ${publicCancellationStart}`;
       }
       
-      console.log("📤 Executing CLI command...");
-      console.log(`Command: ${command}`);
-      
       const result = execSync(command, { encoding: 'utf8' });
       
-      console.log("✅ Stellar source escrow created successfully!");
-      console.log(`📋 Result: ${result.trim()}`);
+      // Extract transaction hash from CLI output if available
+      const txHashMatch = result.match(/(?:hash|tx|transaction)[:=]\s*([a-fA-F0-9]{64})/i);
+      const txHash = txHashMatch ? txHashMatch[1] : result.trim().replace(/"/g, '').slice(0, 64);
+      
+      console.log("✅ Stellar source escrow created");
+      if (txHash && txHash.length === 64) {
+        console.log(`🔗 Explorer: https://stellar.expert/explorer/testnet/tx/${txHash}`);
+      }
       
       return {
         success: true,
         escrowAddress: result.trim().replace(/"/g, ''),
-        transactionHash: 'CLI_SUCCESS',
+        transactionHash: txHash || 'CLI_SUCCESS',
         message: 'Source escrow created successfully'
       };
       
@@ -719,7 +741,7 @@ class DynamicSwapInterface {
     isPartialFill?: boolean,
     isSourceEscrow?: boolean
   ) {
-    console.log(`\n🌟 Withdrawing from Stellar Escrow...`);
+    console.log(`Withdrawing from Stellar escrow`);
     
     try {
       const stellarAddresses = this.getStellarAddresses();
@@ -750,24 +772,24 @@ class DynamicSwapInterface {
         const proofArray = merkleProof.map(p => `"${p.slice(2)}"`); // Remove 0x prefix and add quotes
         const proofStr = `[ ${proofArray.join(', ')} ]`;
         command = `soroban contract invoke --id ${contractAddress} --source ${sourceKey} --network testnet -- ${methodName} --caller ${caller} --escrow_address ${escrowAddress} --secret ${secret.slice(2)} --merkle_proof '${proofStr}'`;
-        console.log(`🔍 Partial fill withdrawal with merkle proof (${merkleProof.length} elements)`);
-        console.log(`   Proof format: ${proofStr}`);
       } else {
         command = `soroban contract invoke --id ${contractAddress} --source ${sourceKey} --network testnet -- ${methodName} --caller ${caller} --escrow_address ${escrowAddress} --secret ${secret.slice(2)}`;
-        console.log(`🔍 Single fill withdrawal (no merkle proof needed)`);
       }
-      
-      console.log("📤 Executing withdrawal CLI command...");
-      console.log(`Command: ${command}`);
       
       const result = execSync(command, { encoding: 'utf8' });
       
-      console.log("✅ Stellar escrow withdrawal completed successfully!");
-      console.log(`📋 Result: ${result.trim()}`);
+      // Extract transaction hash from CLI output if available
+      const txHashMatch = result.match(/(?:hash|tx|transaction)[:=]\s*([a-fA-F0-9]{64})/i);
+      const txHash = txHashMatch ? txHashMatch[1] : result.trim().replace(/"/g, '').slice(0, 64);
+      
+      console.log("✅ Stellar withdrawal completed");
+      if (txHash && txHash.length === 64) {
+        console.log(`🔗 Explorer: https://stellar.expert/explorer/testnet/tx/${txHash}`);
+      }
       
       return {
         success: true,
-        transactionHash: 'CLI_SUCCESS',
+        transactionHash: txHash || 'CLI_SUCCESS',
         message: 'Withdrawal completed successfully'
       };
       
@@ -786,7 +808,7 @@ class DynamicSwapInterface {
     caller: string,
     isSourceEscrow?: boolean
   ) {
-    console.log(`\n🌟 Withdrawing from Stellar Escrow (Partial Fill - Part ${segment.index})...`);
+    console.log(`Withdrawing from Stellar escrow (part ${segment.index})`);
     
     try {
       const stellarAddresses = this.getStellarAddresses();
@@ -810,22 +832,21 @@ class DynamicSwapInterface {
       const proofArgs = segment.proof.map(p => p.slice(2)).join(' ');
       const command = `soroban contract invoke --id ${contractAddress} --source ${sourceKey} --network testnet -- ${methodName} --caller ${caller} --escrow_address ${escrowAddress} --secret ${segment.secret.slice(2)} --merkle_proof ${proofArgs}`;
       
-      console.log(`🔍 Partial fill withdrawal for part ${segment.index}:`);
-      console.log(`   Secret: ${segment.secret.slice(0, 10)}...`);
-      console.log(`   Proof elements: ${segment.proof.length}`);
-      console.log(`   Leaf: ${segment.leaf}`);
-      
-      console.log("📤 Executing withdrawal CLI command...");
-      console.log(`Command: ${command}`);
       
       const result = execSync(command, { encoding: 'utf8' });
       
-      console.log("✅ Stellar partial fill escrow withdrawal completed successfully!");
-      console.log(`📋 Result: ${result.trim()}`);
+      // Extract transaction hash from CLI output if available
+      const txHashMatch = result.match(/(?:hash|tx|transaction)[:=]\s*([a-fA-F0-9]{64})/i);
+      const txHash = txHashMatch ? txHashMatch[1] : result.trim().replace(/"/g, '').slice(0, 64);
+      
+      console.log("✅ Stellar partial withdrawal completed");
+      if (txHash && txHash.length === 64) {
+        console.log(`🔗 Explorer: https://stellar.expert/explorer/testnet/tx/${txHash}`);
+      }
       
       return {
         success: true,
-        transactionHash: 'CLI_SUCCESS',
+        transactionHash: txHash || 'CLI_SUCCESS',
         message: `Partial fill withdrawal completed for part ${segment.index}`
       };
       
@@ -839,7 +860,7 @@ class DynamicSwapInterface {
   }
 
   private async withdrawFromEvmEscrow(escrowAddress: string, secret: string, signer: ethers.Wallet) {
-    console.log(`\n🔧 Withdrawing from EVM Escrow: ${escrowAddress}`);
+    console.log(`Withdrawing from EVM escrow`);
     
     try {
       const escrowContract = new ethers.Contract(escrowAddress, escrowABI, signer);
@@ -851,8 +872,7 @@ class DynamicSwapInterface {
       });
       
       await withdrawTx.wait();
-      console.log("✅ EVM escrow withdrawal completed");
-      console.log(`📋 Transaction Hash: ${withdrawTx.hash}`);
+      console.log("✅ EVM withdrawal completed");
       
     } catch (error) {
       console.error(`❌ Error withdrawing from EVM escrow:`, error);
@@ -883,17 +903,14 @@ class DynamicSwapInterface {
       const balance = await wrapperContract.balanceOf(dstSigner.address);
       if (balance.lt(order.dstAmount)) {
         const amountToWrap = order.dstAmount.sub(balance).add(ethers.utils.parseEther("0.001"));
-        console.log(`Wrapping ${ethers.utils.formatEther(amountToWrap)} ${config.destinationToken}...`);
         
         const wrapTx = await wrapperContract.deposit({ value: amountToWrap });
         await wrapTx.wait();
-        console.log("✅ Token wrapped successfully");
       }
       
       // Approve factory
       const approveTx = await wrapperContract.approve(dstFactoryAddress, order.dstAmount);
       await approveTx.wait();
-      console.log("✅ Factory approved to spend wrapped tokens");
       
       dstTokenAddress = wrappedTokenAddress;
     } else {
@@ -907,7 +924,6 @@ class DynamicSwapInterface {
       
       const approveTx = await tokenContract.approve(dstFactoryAddress, order.dstAmount);
       await approveTx.wait();
-      console.log("✅ Factory approved to spend tokens");
     }
 
     // Create destination escrow
@@ -926,18 +942,16 @@ class DynamicSwapInterface {
     );
     
     const dstReceipt = await createDstEscrowTx.wait();
-    console.log("✅ EVM destination escrow created:", dstReceipt.transactionHash);
+    this.logTransactionSuccess(config.destinationChain, dstReceipt.transactionHash, "EVM destination escrow created");
     
     // Extract escrow address from receipt
     const escrowAddress = this.extractEscrowAddressFromReceipt(dstReceipt);
-    console.log("📋 EVM destination escrow address:", escrowAddress);
     
     return escrowAddress;
   }
 
   async start() {
-    console.log("🚀 Welcome to Dynamic Cross-Chain Atomic Swap Interface");
-    console.log("========================================================\n");
+    console.log("🚀 Dynamic Cross-Chain Atomic Swap Interface\n");
 
     try {
       const swapConfig = await this.getSwapConfiguration();
@@ -1068,7 +1082,7 @@ class DynamicSwapInterface {
     }
 
     // Calculate destination amount using price API
-    console.log("\n💰 Fetching current prices...");
+    console.log("Fetching current prices...");
     try {
       const destinationAmount = await PriceService.calculateDestinationAmount(
         sourceToken,
@@ -1117,7 +1131,6 @@ class DynamicSwapInterface {
 
   private async displaySwapSummary(config: SwapConfig) {
     console.log("\n📋 Swap Summary");
-    console.log("===============");
     console.log(`Source: ${config.sourceAmount} ${config.sourceToken} on ${this.chains[config.sourceChain].name}`);
     console.log(`Destination: ${config.destinationAmount.toFixed(6)} ${config.destinationToken} on ${this.chains[config.destinationChain].name}`);
     
@@ -1131,9 +1144,7 @@ class DynamicSwapInterface {
       const sourcePrice = await PriceService.getTokenPrice(config.sourceToken);
       const destPrice = await PriceService.getTokenPrice(config.destinationToken);
       
-      console.log(`\n💵 Current Prices:`);
-      console.log(`${config.sourceToken}: $${sourcePrice.toFixed(2)}`);
-      console.log(`${config.destinationToken}: $${destPrice.toFixed(2)}`);
+      console.log(`\nCurrent prices: ${config.sourceToken} $${sourcePrice.toFixed(2)}, ${config.destinationToken} $${destPrice.toFixed(2)}`);
       
       const totalValue = config.sourceAmount * sourcePrice;
       console.log(`\nTotal Value: ~$${totalValue.toFixed(2)}`);
@@ -1143,12 +1154,15 @@ class DynamicSwapInterface {
   }
 
   private async executeSwap(config: SwapConfig) {
+    // Display balances before swap
+    await this.displayWalletBalances("Wallet Balances Before Swap", config);
+    
     // Check if either chain is Stellar
     const isSrcStellar = this.isStellarChain(config.sourceChain);
     const isDstStellar = this.isStellarChain(config.destinationChain);
     
     if (isSrcStellar || isDstStellar) {
-      console.log("🌟 Stellar chain detected - using Stellar integration");
+      console.log("Using Stellar integration");
       
       // Generate order with proper buyer address
       const stellarAddresses = this.getStellarAddresses();
@@ -1182,8 +1196,10 @@ class DynamicSwapInterface {
         }
       }
       
-      console.log("\n🎉 Stellar Cross-Chain Swap Process Completed!");
-      console.log("==============================================");
+      console.log("\n✅ Stellar cross-chain swap process completed");
+      
+      // Display balances after swap
+      await this.displayWalletBalances("Wallet Balances After Swap", config);
       return;
     }
     
@@ -1196,7 +1212,7 @@ class DynamicSwapInterface {
     const resolverSigner = new ethers.Wallet(this.resolverPrivateKey, srcProvider);
     const dstSigner = new ethers.Wallet(this.resolverPrivateKey, dstProvider);
 
-    console.log("\n👤 Participants:");
+    console.log("\nParticipants:");
     console.log(`Buyer: ${buyerSigner.address}`);
     console.log(`Resolver: ${resolverSigner.address}`);
 
@@ -1210,20 +1226,20 @@ class DynamicSwapInterface {
     } else {
       // Execute single fill workflow
       // Step 1: Buyer preparation
-      console.log("\n📋 STEP 1: Buyer Preparation");
-      console.log("-----------------------------");
+      console.log("\n[1/2] Buyer preparation");
       await this.prepareBuyer(config, buyerSigner, order);
 
       // Step 2: Resolver execution
-      console.log("\n🔄 STEP 2: Resolver Execution");
-      console.log("------------------------------");
+      console.log("\n[2/2] Resolver execution");
       await this.executeResolverWorkflow(config, order, resolverSigner, dstSigner);
     }
 
-    console.log("\n🎉 Cross-Chain Swap Completed Successfully!");
-    console.log("===========================================");
+    console.log("\n✅ Cross-chain swap completed successfully");
     console.log(`✅ Buyer received ${config.destinationAmount.toFixed(6)} ${config.destinationToken} on ${this.chains[config.destinationChain].name}`);
     console.log(`✅ Resolver received ${config.sourceAmount} ${config.sourceToken} on ${this.chains[config.sourceChain].name}`);
+    
+    // Display balances after swap
+    await this.displayWalletBalances("Wallet Balances After Swap", config);
   }
 
   private async createOrder(config: SwapConfig, buyerAddress: string): Promise<Order> {
@@ -1243,9 +1259,7 @@ class DynamicSwapInterface {
       // Initialize tracking arrays for parts
       filledParts = Array(config.partsCount).fill(false);
       
-      console.log(`\n🌳 Generated Merkle Tree for ${config.partsCount} parts:`);
-      console.log(`📋 HashLock (Merkle Root): ${hashedSecret}`);
-      console.log(`🔐 Total secrets generated: ${config.partsCount! + 1}`);
+      console.log(`Generated merkle tree for ${config.partsCount} parts (root: ${hashedSecret.slice(0, 10)}...)`);
     } else {
       // Single fill - generate traditional secret and hash
       const secretBytes = ethers.utils.randomBytes(32);
@@ -1277,15 +1291,13 @@ class DynamicSwapInterface {
         partAmounts.push(srcAmountPerPart);
       }
       
-      console.log(`💰 Part amounts calculated:`);
-      console.log(`   Source per part: ${ethers.utils.formatUnits(srcAmountPerPart, srcTokenConfig.decimals)} ${config.sourceToken}`);
-      console.log(`   Destination per part: ${ethers.utils.formatUnits(dstAmountPerPart, dstTokenConfig.decimals)} ${config.destinationToken}`);
     }
 
     // Generate orderId using proper BigNumber format
+    // Handle both Ethereum and Stellar addresses by using string encoding
     const orderId = ethers.utils.keccak256(
       ethers.utils.defaultAbiCoder.encode(
-        ['string', 'address', 'string', 'uint256', 'string'],
+        ['string', 'string', 'string', 'uint256', 'string'],
         [hashedSecret + Date.now().toString(), buyerAddress, 'ETH->XLM', srcAmount, hashedSecret]
       )
     );
@@ -1322,11 +1334,6 @@ class DynamicSwapInterface {
     const srcAmountPerPart = order.srcAmount.div(partsCount);
     const dstAmountPerPart = order.dstAmount.div(partsCount);
 
-    console.log(`\n🔍 DEBUG - Amount calculations:`);
-    console.log(`   Total srcAmount: ${ethers.utils.formatUnits(order.srcAmount, this.chains[config.sourceChain].tokens[config.sourceToken].decimals)} ${config.sourceToken}`);
-    console.log(`   Parts count: ${partsCount}`);
-    console.log(`   SrcAmount per part: ${ethers.utils.formatUnits(srcAmountPerPart, this.chains[config.sourceChain].tokens[config.sourceToken].decimals)} ${config.sourceToken}`);
-    console.log(`   SrcAmount per part (raw): ${srcAmountPerPart.toString()}`);
 
     for (let i = 0; i < partsCount; i++) {
       const segment: PartialFillSegment = {
@@ -1343,10 +1350,7 @@ class DynamicSwapInterface {
       segments.push(segment);
     }
 
-    console.log(`\n📦 Created ${segments.length} partial fill segments:`);
-    segments.forEach((segment, idx) => {
-      console.log(`   Part ${idx}: ${ethers.utils.formatUnits(segment.srcAmount, this.chains[config.sourceChain].tokens[config.sourceToken].decimals)} ${config.sourceToken} (${segment.percentage.toFixed(1)}%)`);
-    });
+    console.log(`Created ${segments.length} partial fill segments`);
 
     return segments;
   }
@@ -1357,8 +1361,7 @@ class DynamicSwapInterface {
       return;
     }
 
-    console.log("\n🔀 PARTIAL FILL EXECUTION");
-    console.log("=========================");
+    console.log("\n🔀 Partial fill execution");
     console.log(`Order will be filled in ${order.partialFillManager!.getPartsCount()} parts by the resolver`);
 
     // Check if either chain is Stellar
@@ -1366,8 +1369,7 @@ class DynamicSwapInterface {
     const isDstStellar = this.isStellarChain(config.destinationChain);
     
     if (isSrcStellar || isDstStellar) {
-      console.log("🌟 Stellar chain detected in partial fill workflow");
-      console.log("🔄 Implementing Stellar partial fill workflow...");
+      console.log("Using Stellar partial fill workflow");
       
       // Create segments
       const segments = this.createPartialFillSegments(order, config);
@@ -1380,8 +1382,7 @@ class DynamicSwapInterface {
       const dstSigner = new ethers.Wallet(this.resolverPrivateKey, dstProvider);
 
       // Step 1: Buyer preparation (full amount approval)
-      console.log("\n📋 STEP 1: Buyer Preparation (Full Amount Approval)");
-      console.log("----------------------------------------------------");
+      console.log("\n[1/2] Buyer preparation (full amount approval)");
       if (isSrcStellar) {
         await this.prepareStellarBuyer(config, order);
       } else {
@@ -1389,8 +1390,7 @@ class DynamicSwapInterface {
       }
 
       // Step 2: Resolver fills the order in parts
-      console.log("\n🔄 STEP 2: Resolver Executes Partial Fills");
-      console.log("-------------------------------------------");
+      console.log("\n[2/2] Resolver executes partial fills");
       
       let totalFilled = ethers.BigNumber.from(0);
       let fillStatus = {
@@ -1403,11 +1403,7 @@ class DynamicSwapInterface {
 
       for (let i = 0; i < segments.length; i++) {
         const segment = segments[i];
-        console.log(`\n🎯 Filling Part ${i + 1}/${segments.length} (${segment.percentage.toFixed(1)}%)`);
-        console.log(`   Amount: ${ethers.utils.formatUnits(segment.srcAmount, this.chains[config.sourceChain].tokens[config.sourceToken].decimals)} ${config.sourceToken}`);
-        console.log(`   Secret: ${segment.secret}`);
-        console.log(`   Leaf: ${segment.leaf}`);
-        console.log(`   Proof length: ${segment.proof.length}`);
+        console.log(`\n[${i + 1}/${segments.length}] Filling part ${segment.percentage.toFixed(1)}%`);
 
         try {
           // Create and execute partial escrows for this segment
@@ -1433,7 +1429,7 @@ class DynamicSwapInterface {
           // Display current status
           this.displayPartialFillStatus(config, order, fillStatus);
 
-          console.log(`✅ Part ${i + 1} completed successfully!`);
+          console.log(`✅ Part ${i + 1} completed`);
           
           // Mark in order tracking
           if (order.filledParts) {
@@ -1447,13 +1443,12 @@ class DynamicSwapInterface {
 
         // Wait between fills (for demo purposes)
         if (i < segments.length - 1) {
-          console.log("⏳ Waiting 5 seconds before next fill...");
+          console.log("Waiting 5s before next fill");
           await new Promise(resolve => setTimeout(resolve, 5000));
         }
       }
 
-      console.log("\n🎉 PARTIAL FILL WORKFLOW COMPLETED!");
-      console.log("====================================");
+      console.log("\n✅ Partial fill workflow completed");
       console.log(`✅ Order filled: ${fillStatus.completedParts}/${fillStatus.totalParts} parts (${fillStatus.percentageComplete.toFixed(1)}%)`);
       console.log(`✅ Total filled: ${ethers.utils.formatUnits(fillStatus.totalFilledAmount, this.chains[config.sourceChain].tokens[config.sourceToken].decimals)} ${config.sourceToken}`);
       
@@ -1471,13 +1466,11 @@ class DynamicSwapInterface {
     const dstSigner = new ethers.Wallet(this.resolverPrivateKey, dstProvider);
 
     // Step 1: Buyer preparation (full amount approval)
-    console.log("\n📋 STEP 1: Buyer Preparation (Full Amount Approval)");
-    console.log("----------------------------------------------------");
+    console.log("\n[1/2] Buyer preparation (full amount approval)");
     await this.prepareBuyer(config, buyerSigner, order);
 
     // Step 2: Resolver fills the order in parts
-    console.log("\n🔄 STEP 2: Resolver Executes Partial Fills");
-    console.log("-------------------------------------------");
+    console.log("\n[2/2] Resolver executes partial fills");
     
     let totalFilled = ethers.BigNumber.from(0);
     let fillStatus = {
@@ -1490,11 +1483,7 @@ class DynamicSwapInterface {
 
     for (let i = 0; i < segments.length; i++) {
       const segment = segments[i];
-      console.log(`\n🎯 Filling Part ${i + 1}/${segments.length} (${segment.percentage.toFixed(1)}%)`);
-      console.log(`   Amount: ${ethers.utils.formatUnits(segment.srcAmount, this.chains[config.sourceChain].tokens[config.sourceToken].decimals)} ${config.sourceToken}`);
-      console.log(`   Secret: ${segment.secret}`);
-      console.log(`   Leaf: ${segment.leaf}`);
-      console.log(`   Proof length: ${segment.proof.length}`);
+      console.log(`\n[${i + 1}/${segments.length}] Filling part ${segment.percentage.toFixed(1)}%`);
 
       try {
         // Create and execute partial escrows for this segment
@@ -1511,7 +1500,7 @@ class DynamicSwapInterface {
         // Display current status
         this.displayPartialFillStatus(config, order, fillStatus);
 
-        console.log(`✅ Part ${i + 1} completed successfully!`);
+        console.log(`✅ Part ${i + 1} completed`);
         
         // Mark in order tracking
         if (order.filledParts) {
@@ -1525,20 +1514,18 @@ class DynamicSwapInterface {
 
       // Wait between fills (for demo purposes)
       if (i < segments.length - 1) {
-        console.log("⏳ Waiting 5 seconds before next fill...");
+        console.log("Waiting 5s before next fill");
         await new Promise(resolve => setTimeout(resolve, 5000));
       }
     }
 
-    console.log("\n🎉 PARTIAL FILL WORKFLOW COMPLETED!");
-    console.log("====================================");
+    console.log("\n✅ Partial fill workflow completed");
     console.log(`✅ Order filled: ${fillStatus.completedParts}/${fillStatus.totalParts} parts (${fillStatus.percentageComplete.toFixed(1)}%)`);
     console.log(`✅ Total filled: ${ethers.utils.formatUnits(fillStatus.totalFilledAmount, this.chains[config.sourceChain].tokens[config.sourceToken].decimals)} ${config.sourceToken}`);
   }
 
   private displayPartialFillStatus(config: SwapConfig, order: Order, fillStatus: any) {
-    console.log("\n📊 PARTIAL FILL STATUS");
-    console.log("======================");
+    console.log("\n📊 Partial fill status");
     console.log(`Progress: ${fillStatus.completedParts}/${fillStatus.totalParts} parts (${fillStatus.percentageComplete.toFixed(1)}%)`);
     console.log(`Completed: ${ethers.utils.formatUnits(fillStatus.totalFilledAmount, this.chains[config.sourceChain].tokens[config.sourceToken].decimals)} ${config.sourceToken}`);
     console.log(`Remaining: ${ethers.utils.formatUnits(order.srcAmount.sub(fillStatus.totalFilledAmount), this.chains[config.sourceChain].tokens[config.sourceToken].decimals)} ${config.sourceToken}`);
@@ -1566,25 +1553,12 @@ class DynamicSwapInterface {
       ).toHexString()
     );
 
-    console.log(`🏗️ Creating escrow pair for part ${segment.index}`);
+    console.log(`Creating escrow pair for part ${segment.index}`);
 
     // Create source escrow using unified function
     const srcFactoryContract = new ethers.Contract(srcFactoryAddress, factoryABI, resolverSigner);
     const srcLopContract = new ethers.Contract(this.chains[config.sourceChain].lopAddress!, lopABI, resolverSigner);
     
-    console.log(`🔍 DEBUG - fillOrder parameters:`);
-    console.log(`   orderHash: ${order.orderId}`);
-    console.log(`   maker: ${buyerAddress}`);
-    console.log(`   recipient: ${resolverSigner.address}`);
-    console.log(`   tokenAmount: ${segment.srcAmount.toString()}`);
-    console.log(`   hashedSecret: ${order.hashedSecret}`);
-    console.log(`   withdrawalStart: ${order.withdrawalStart}`);
-    console.log(`   publicWithdrawalStart: ${order.publicWithdrawalStart}`);
-    console.log(`   cancellationStart: ${order.cancellationStart}`);
-    console.log(`   publicCancellationStart: ${order.publicCancellationStart}`);
-    console.log(`   partIndex: ${segment.index}`);
-    console.log(`   totalParts: ${order.partialFillManager!.getPartsCount()}`);
-    console.log(`   value: ${ethers.utils.parseUnits("0.001", "ether").toString()}`);
     
     // Try using the exact same approach as the working case
     const createSrcTx = await srcLopContract.fillOrder(
@@ -1603,7 +1577,7 @@ class DynamicSwapInterface {
     );
     
     const srcReceipt = await createSrcTx.wait();
-    console.log(`✅ Source escrow created: ${srcReceipt.transactionHash}`);
+    this.logTransactionSuccess(config.sourceChain, srcReceipt.transactionHash, "Source escrow created");
 
     // Prepare destination tokens if needed
     await this.prepareDestinationTokens(config, dstSigner, segment.dstAmount);
@@ -1627,7 +1601,7 @@ class DynamicSwapInterface {
     );
     
     const dstReceipt = await createDstTx.wait();
-    console.log(`✅ Destination escrow created: ${dstReceipt.transactionHash}`);
+    this.logTransactionSuccess(config.destinationChain, dstReceipt.transactionHash, "Destination escrow created");
 
     // Extract real escrow addresses from events
     const srcEscrowAddress = this.extractEscrowAddressFromReceipt(srcReceipt);
@@ -1638,12 +1612,11 @@ class DynamicSwapInterface {
     segment.dstEscrowAddress = dstEscrowAddress;
 
     // Wait for withdrawal window
-    console.log("⏳ Waiting for withdrawal window...");
+    console.log("Waiting for withdrawal window");
     const currentTime = Math.floor(Date.now() / 1000);
     const timeToWait = order.withdrawalStart - currentTime;
     
     if (timeToWait > 0) {
-      console.log(`   Need to wait ${timeToWait} seconds...`);
       const { skipWaiting } = await inquirer.prompt([
         {
           type: 'input',
@@ -1653,15 +1626,14 @@ class DynamicSwapInterface {
       ]);
       
       if (skipWaiting.toLowerCase() === 'y' || skipWaiting.toLowerCase() === 'yes') {
-        console.log("🚀 Skipping withdrawal timelock for demo purposes");
+        console.log("Skipping withdrawal timelock for demo");
       } else {
-        console.log(`   Waiting ${timeToWait} seconds...`);
         await new Promise(resolve => setTimeout(resolve, timeToWait * 1000));
       }
     }
 
     // Execute real withdrawals with merkle proofs
-    console.log(`🔓 Executing withdrawals with merkle proof...`);
+    console.log(`Executing withdrawals with merkle proof`);
     await this.executePartialWithdrawals(segment, resolverSigner, dstSigner);
   }
 
@@ -1706,13 +1678,11 @@ class DynamicSwapInterface {
         
         const wrapTx = await wrapperContract.deposit({ value: amountToWrap });
         await wrapTx.wait();
-        console.log("   ✅ Token wrapped successfully");
       }
       
       // Approve factory
       const approveTx = await wrapperContract.approve(dstFactoryAddress, amount);
       await approveTx.wait();
-      console.log("   ✅ Factory approved to spend wrapped tokens");
     } else {
       // For ERC20 tokens, just approve
       const tokenABI = [
@@ -1724,7 +1694,6 @@ class DynamicSwapInterface {
       
       const approveTx = await tokenContract.approve(dstFactoryAddress, amount);
       await approveTx.wait();
-      console.log("   ✅ Factory approved to spend tokens");
     }
   }
 
@@ -1750,6 +1719,7 @@ class DynamicSwapInterface {
     });
     await srcWithdrawTx.wait();
     console.log(`   ✅ Source withdrawal completed: ${srcWithdrawTx.hash}`);
+    console.log(`   🔗 Explorer: https://sepolia.etherscan.io/tx/${srcWithdrawTx.hash}`);
 
     // Real withdrawal from destination escrow (buyer gets tokens)
     const dstEscrowContract = new ethers.Contract(segment.dstEscrowAddress!, enhancedEscrowABI, dstSigner);
@@ -1761,6 +1731,7 @@ class DynamicSwapInterface {
     });
     await dstWithdrawTx.wait();
     console.log(`   ✅ Destination withdrawal completed: ${dstWithdrawTx.hash}`);
+    console.log(`   🔗 Explorer: https://sepolia.etherscan.io/tx/${dstWithdrawTx.hash}`);
   }
 
   private async prepareBuyer(config: SwapConfig, buyerSigner: ethers.Wallet, order: Order) {
@@ -1772,7 +1743,6 @@ class DynamicSwapInterface {
       const wrappedTokenSymbol = config.sourceChain.includes('sepolia') ? 'WETH' : 'WBNB';
       const wrappedTokenAddress = this.chains[config.sourceChain].tokens[wrappedTokenSymbol].address;
       
-      console.log(`Wrapping ${config.sourceAmount} ${config.sourceToken} to ${wrappedTokenSymbol}...`);
       
       const wrapperABI = [
         "function deposit() payable",
@@ -1785,12 +1755,10 @@ class DynamicSwapInterface {
       // Wrap native token
       const wrapTx = await wrapperContract.deposit({ value: order.srcAmount });
       await wrapTx.wait();
-      console.log("✅ Token wrapped successfully");
       
       // Approve factory
       const approveTx = await wrapperContract.approve(factoryAddress, order.srcAmount);
       await approveTx.wait();
-      console.log("✅ Factory approved to spend wrapped tokens");
       
       // Update order to use wrapped token address
       order.srcToken = wrappedTokenAddress;
@@ -1806,12 +1774,11 @@ class DynamicSwapInterface {
       console.log(`Approving ${config.sourceAmount} ${config.sourceToken}...`);
       const approveTx = await tokenContract.approve(factoryAddress, order.srcAmount);
       await approveTx.wait();
-      console.log("✅ Factory approved to spend tokens");
     }
   }
 
   private async prepareStellarBuyer(config: SwapConfig, order: Order) {
-    console.log(`\n🌟 Preparing Stellar Buyer...`);
+    console.log(`Preparing Stellar buyer`);
     
     const stellarAddresses = this.getStellarAddresses();
     const factoryAddress = this.chains[config.sourceChain].factoryAddress;
@@ -1827,20 +1794,16 @@ class DynamicSwapInterface {
       const { execSync } = require('child_process');
       
       // Step 1: Buyer approves the factory contract (internal allowance)
-      console.log(`\n📝 Step 1: Buyer approves factory contract...`);
+      console.log(`Buyer approving factory contract`);
       const factoryApproveCmd = `soroban contract invoke --id ${factoryAddress} --source stellar-buyer --network testnet -- approve --caller ${stellarAddresses.buyer} --amount ${amountInStroops * 2}`;
       
-      console.log(`Command: ${factoryApproveCmd}`);
       const factoryResult = execSync(factoryApproveCmd, { encoding: 'utf8' });
-      console.log("✅ Factory contract approved");
       
       // Step 2: Buyer approves the token contract (for actual token transfer)
-      console.log(`\n📝 Step 2: Buyer approves token contract...`);
+      console.log(`Buyer approving token contract`);
       const tokenApproveCmd = `soroban contract invoke --id ${tokenAddress} --source stellar-buyer --network testnet -- approve --from ${stellarAddresses.buyer} --spender ${factoryAddress} --amount ${amountInStroops * 2} --expiration_ledger 1000000`;
       
-      console.log(`Command: ${tokenApproveCmd}`);
       const tokenResult = execSync(tokenApproveCmd, { encoding: 'utf8' });
-      console.log("✅ Token contract approved");
       
       console.log(`\n✅ Stellar buyer preparation completed!`);
       console.log(`   Factory allowance: ${amountInStroops * 2} stroops`);
@@ -1853,7 +1816,7 @@ class DynamicSwapInterface {
   }
 
   private async prepareStellarResolver(config: SwapConfig, order: Order) {
-    console.log(`\n🌟 Preparing Stellar Resolver...`);
+    console.log(`Preparing Stellar resolver`);
     
     const stellarAddresses = this.getStellarAddresses();
     const factoryAddress = this.chains[config.destinationChain].factoryAddress;
@@ -1865,10 +1828,10 @@ class DynamicSwapInterface {
     console.log(`  Factory: ${factoryAddress}`);
     console.log(`  Token Contract: ${tokenAddress}`);
     
-    console.log(`\n📝 Note: Resolver will transfer tokens directly (no approval needed)`);
+    console.log(`Note: Resolver transfers tokens directly`);
     console.log(`   Resolver has XLM balance and will authorize their own transfers`);
     
-    console.log(`\n✅ Stellar resolver preparation completed!`);
+    console.log(`✅ Stellar resolver preparation completed`);
   }
 
   private async executeSourceEscrowOnly(config: SwapConfig, order: Order, resolverSigner: ethers.Wallet) {
@@ -1893,7 +1856,7 @@ class DynamicSwapInterface {
     );
 
     const srcReceipt = await createSrcEscrowTx.wait();
-    console.log("✅ Source escrow created:", srcReceipt.transactionHash);
+    this.logTransactionSuccess(config.sourceChain, srcReceipt.transactionHash, "Source escrow created");
 
     // Extract source escrow address
     const srcEscrowCreatedTopic = ethers.utils.id("SrcEscrowCreated(address,address,address,bytes32,uint256,uint256,uint256,uint256,uint256)");
@@ -1944,7 +1907,7 @@ class DynamicSwapInterface {
     );
     
     const srcReceipt = await createSrcEscrowTx.wait();
-    console.log("✅ Source escrow created:", srcReceipt.transactionHash);
+    this.logTransactionSuccess(config.sourceChain, srcReceipt.transactionHash, "Source escrow created");
     
     // Extract source escrow address
     const srcEscrowCreatedTopic = ethers.utils.id("SrcEscrowCreated(address,address,address,bytes32,uint256,uint256,uint256,uint256,uint256)");
@@ -1985,17 +1948,14 @@ class DynamicSwapInterface {
       const balance = await wrapperContract.balanceOf(dstSigner.address);
       if (balance.lt(order.dstAmount)) {
         const amountToWrap = order.dstAmount.sub(balance).add(ethers.utils.parseEther("0.001"));
-        console.log(`Wrapping ${ethers.utils.formatEther(amountToWrap)} ${config.destinationToken}...`);
         
         const wrapTx = await wrapperContract.deposit({ value: amountToWrap });
         await wrapTx.wait();
-        console.log("✅ Token wrapped successfully");
       }
       
       // Approve factory
       const approveTx = await wrapperContract.approve(dstFactoryAddress, order.dstAmount);
       await approveTx.wait();
-      console.log("✅ Factory approved to spend wrapped tokens");
       
       dstTokenAddress = wrappedTokenAddress;
     } else {
@@ -2009,7 +1969,6 @@ class DynamicSwapInterface {
       
       const approveTx = await tokenContract.approve(dstFactoryAddress, order.dstAmount);
       await approveTx.wait();
-      console.log("✅ Factory approved to spend tokens");
     }
 
     // Create destination escrow
@@ -2028,7 +1987,7 @@ class DynamicSwapInterface {
     );
     
     const dstReceipt = await createDstEscrowTx.wait();
-    console.log("✅ Destination escrow created:", dstReceipt.transactionHash);
+    this.logTransactionSuccess(config.destinationChain, dstReceipt.transactionHash, "Destination escrow created");
     
     // Extract destination escrow address
     const dstEscrowCreatedTopic = ethers.utils.id("DstEscrowCreated(address,address,address,bytes32,uint256,uint256,uint256)");
@@ -2060,7 +2019,7 @@ class DynamicSwapInterface {
     const timeToWait = order.withdrawalStart - currentTime;
     
     if (timeToWait > 0) {
-      console.log(`Waiting ${timeToWait} seconds for withdrawal window to open...`);
+      console.log(`Waiting ${timeToWait}s for withdrawal window`);
       await new Promise(resolve => setTimeout(resolve, timeToWait * 1000));
     }
 
@@ -2089,7 +2048,7 @@ class DynamicSwapInterface {
     await dstWithdrawTx.wait();
     console.log("✅ Destination escrow withdrawal completed");
     
-    console.log("✅ Swap execution completed successfully!");
+    console.log("✅ Swap execution completed");
   }
 
   private async createAndExecuteStellarPartialEscrowPair(
@@ -2111,7 +2070,7 @@ class DynamicSwapInterface {
     console.log(`   Proof elements: ${segment.proof.length}`);
 
     // Create source escrow on Stellar
-    console.log(`\n📝 Creating Stellar source escrow for part ${segment.index}`);
+    console.log(`Creating Stellar source escrow for part ${segment.index}`);
     const stellarSrcResult = await this.createStellarSourceEscrow(
       stellarAddresses.resolver, // creator (resolver)
       stellarAddresses.resolver, // recipient (resolver)
@@ -2130,7 +2089,7 @@ class DynamicSwapInterface {
     }
     
     // Create destination escrow on Stellar
-    console.log(`\n📝 Creating Stellar destination escrow for part ${segment.index}`);
+    console.log(`Creating Stellar destination escrow for part ${segment.index}`);
     const stellarDstResult = await this.createStellarDestinationEscrow(
       stellarAddresses.resolver, // creator (resolver)
       stellarAddresses.buyer, // recipient (buyer)
@@ -2152,12 +2111,11 @@ class DynamicSwapInterface {
     segment.dstEscrowAddress = stellarDstResult.escrowAddress;
 
     // Wait for withdrawal window
-    console.log("⏳ Waiting for withdrawal window...");
+    console.log("Waiting for withdrawal window");
     const currentTime = Math.floor(Date.now() / 1000);
     const timeToWait = order.withdrawalStart - currentTime;
     
     if (timeToWait > 0) {
-      console.log(`   Need to wait ${timeToWait} seconds...`);
       const { skipWaiting } = await inquirer.prompt([
         {
           type: 'input',
@@ -2167,15 +2125,14 @@ class DynamicSwapInterface {
       ]);
       
       if (skipWaiting.toLowerCase() === 'y' || skipWaiting.toLowerCase() === 'yes') {
-        console.log("🚀 Skipping withdrawal timelock for demo purposes");
+        console.log("Skipping withdrawal timelock for demo");
       } else {
-        console.log(`   Waiting ${timeToWait} seconds...`);
         await new Promise(resolve => setTimeout(resolve, timeToWait * 1000));
       }
     }
 
     // Execute withdrawals with merkle proofs
-    console.log(`🔓 Executing Stellar withdrawals with merkle proof for part ${segment.index}...`);
+    console.log(`Executing Stellar withdrawals for part ${segment.index}`);
     await this.executeStellarPartialWithdrawals(segment);
   }
 
@@ -2198,7 +2155,7 @@ class DynamicSwapInterface {
     console.log(`   Proof elements: ${segment.proof.length}`);
 
     // Create source escrow on Stellar
-    console.log(`\n📝 Creating Stellar source escrow for part ${segment.index}`);
+    console.log(`Creating Stellar source escrow for part ${segment.index}`);
     const stellarSrcResult = await this.createStellarSourceEscrow(
       stellarAddresses.resolver, // creator (resolver)
       stellarAddresses.resolver, // recipient (resolver)
@@ -2220,7 +2177,7 @@ class DynamicSwapInterface {
     await this.prepareDestinationTokens(config, dstSigner, segment.dstAmount);
 
     // Create destination escrow on EVM
-    console.log(`\n📝 Creating EVM destination escrow for part ${segment.index}`);
+    console.log(`Creating EVM destination escrow for part ${segment.index}`);
     const dstFactoryAddress = this.chains[config.destinationChain].factoryAddress;
     const dstFactoryContract = new ethers.Contract(dstFactoryAddress, factoryABI, dstSigner);
     
@@ -2237,7 +2194,7 @@ class DynamicSwapInterface {
     );
     
     const dstReceipt = await createDstTx.wait();
-    console.log(`✅ EVM destination escrow created: ${dstReceipt.transactionHash}`);
+    this.logTransactionSuccess(config.destinationChain, dstReceipt.transactionHash, "EVM destination escrow created");
 
     // Extract destination escrow address
     const dstEscrowAddress = this.extractEscrowAddressFromReceipt(dstReceipt);
@@ -2247,12 +2204,11 @@ class DynamicSwapInterface {
     segment.dstEscrowAddress = dstEscrowAddress;
 
     // Wait for withdrawal window
-    console.log("⏳ Waiting for withdrawal window...");
+    console.log("Waiting for withdrawal window");
     const currentTime = Math.floor(Date.now() / 1000);
     const timeToWait = order.withdrawalStart - currentTime;
     
     if (timeToWait > 0) {
-      console.log(`   Need to wait ${timeToWait} seconds...`);
       const { skipWaiting } = await inquirer.prompt([
         {
           type: 'input',
@@ -2262,15 +2218,14 @@ class DynamicSwapInterface {
       ]);
       
       if (skipWaiting.toLowerCase() === 'y' || skipWaiting.toLowerCase() === 'yes') {
-        console.log("🚀 Skipping withdrawal timelock for demo purposes");
+        console.log("Skipping withdrawal timelock for demo");
       } else {
-        console.log(`   Waiting ${timeToWait} seconds...`);
         await new Promise(resolve => setTimeout(resolve, timeToWait * 1000));
       }
     }
 
     // Execute withdrawals with merkle proofs
-    console.log(`🔓 Executing Stellar→EVM withdrawals with merkle proof for part ${segment.index}...`);
+    console.log(`Executing Stellar→EVM withdrawals for part ${segment.index}`);
     await this.executeStellarToEvmPartialWithdrawals(segment, dstSigner);
   }
 
@@ -2294,7 +2249,7 @@ class DynamicSwapInterface {
     console.log(`   Proof elements: ${segment.proof.length}`);
 
     // Create source escrow on EVM
-    console.log(`\n📝 Creating EVM source escrow for part ${segment.index}`);
+    console.log(`Creating EVM source escrow for part ${segment.index}`);
     const srcFactoryAddress = this.chains[config.sourceChain].factoryAddress;
     const srcFactoryContract = new ethers.Contract(srcFactoryAddress, factoryABI, resolverSigner);
     const srcLopContract = new ethers.Contract(this.chains[config.sourceChain].lopAddress!, lopABI, resolverSigner);
@@ -2315,13 +2270,13 @@ class DynamicSwapInterface {
     );
     
     const srcReceipt = await createSrcTx.wait();
-    console.log(`✅ EVM source escrow created: ${srcReceipt.transactionHash}`);
+    this.logTransactionSuccess(config.sourceChain, srcReceipt.transactionHash, "EVM source escrow created");
 
     // Extract source escrow address
     const srcEscrowAddress = this.extractEscrowAddressFromReceipt(srcReceipt);
 
     // Create destination escrow on Stellar
-    console.log(`\n📝 Creating Stellar destination escrow for part ${segment.index}`);
+    console.log(`Creating Stellar destination escrow for part ${segment.index}`);
     const stellarDstResult = await this.createStellarDestinationEscrow(
       stellarAddresses.resolver, // creator (resolver)
       stellarAddresses.buyer, // recipient (buyer)
@@ -2343,12 +2298,11 @@ class DynamicSwapInterface {
     segment.dstEscrowAddress = stellarDstResult.escrowAddress;
 
     // Wait for withdrawal window
-    console.log("⏳ Waiting for withdrawal window...");
+    console.log("Waiting for withdrawal window");
     const currentTime = Math.floor(Date.now() / 1000);
     const timeToWait = order.withdrawalStart - currentTime;
     
     if (timeToWait > 0) {
-      console.log(`   Need to wait ${timeToWait} seconds...`);
       const { skipWaiting } = await inquirer.prompt([
         {
           type: 'input',
@@ -2358,15 +2312,14 @@ class DynamicSwapInterface {
       ]);
       
       if (skipWaiting.toLowerCase() === 'y' || skipWaiting.toLowerCase() === 'yes') {
-        console.log("🚀 Skipping withdrawal timelock for demo purposes");
+        console.log("Skipping withdrawal timelock for demo");
       } else {
-        console.log(`   Waiting ${timeToWait} seconds...`);
         await new Promise(resolve => setTimeout(resolve, timeToWait * 1000));
       }
     }
 
     // Execute withdrawals with merkle proofs
-    console.log(`🔓 Executing EVM→Stellar withdrawals with merkle proof for part ${segment.index}...`);
+    console.log(`Executing EVM→Stellar withdrawals for part ${segment.index}`);
     await this.executeEvmToStellarPartialWithdrawals(segment, resolverSigner);
   }
 
@@ -2446,6 +2399,7 @@ class DynamicSwapInterface {
     });
     await dstWithdrawTx.wait();
     console.log(`   ✅ EVM destination withdrawal completed: ${dstWithdrawTx.hash}`);
+    console.log(`   🔗 Explorer: https://sepolia.etherscan.io/tx/${dstWithdrawTx.hash}`);
 
     console.log(`   ✅ Stellar→EVM partial withdrawals completed for part ${segment.index}`);
   }
@@ -2470,6 +2424,7 @@ class DynamicSwapInterface {
     });
     await srcWithdrawTx.wait();
     console.log(`   ✅ EVM source withdrawal completed: ${srcWithdrawTx.hash}`);
+    console.log(`   🔗 Explorer: https://sepolia.etherscan.io/tx/${srcWithdrawTx.hash}`);
 
     // Withdraw from Stellar destination escrow (buyer gets tokens)
     console.log("   📤 Withdrawing from Stellar destination escrow (buyer receives tokens)...");

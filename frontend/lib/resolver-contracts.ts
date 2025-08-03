@@ -615,7 +615,7 @@ export class ResolverContractManager {
       const timeWindows = this.calculateTimeWindows()
       const amount = ethers.utils.parseEther(dstAmount)
       
-      // Factory ABI for createDstEscrow
+      // Factory ABI for createDstEscrow - matches dynamic-swap.ts exactly
       const factoryABI = [
         "function createDstEscrow(bytes32 hashedSecret, address recipient, uint256 tokenAmount, uint256 withdrawalStart, uint256 publicWithdrawalStart, uint256 cancellationStart, uint256 partIndex, uint16 totalParts) external payable"
       ]
@@ -634,15 +634,15 @@ export class ResolverContractManager {
       
       const tx = await factoryContract.createDstEscrow(
         hashedSecret,
-        buyerAddress, // recipient (buyer gets the tokens)
+        buyerAddress, // recipient is buyer
         amount,
         timeWindows.withdrawalStart,
         timeWindows.publicWithdrawalStart,
         timeWindows.cancellationStart,
-        partIndex,
-        parts,
+        partIndex, // partIndex
+        parts, // totalParts
         { 
-          value: ethers.utils.parseEther("0.001"),
+          value: ethers.utils.parseEther("0.001"), // deposit amount
           gasLimit: 3000000
         }
       )
