@@ -80,8 +80,12 @@ export default function LandingPage({
           className="flex items-center justify-between p-8"
         >
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-white/10 backdrop-blur-xl rounded-xl flex items-center justify-center border border-white/20">
-              <Sparkles className="w-5 h-5 text-white" />
+            <div className="w-10 h-10 bg-white/10 backdrop-blur-xl rounded-xl flex items-center justify-center border border-white/20 overflow-hidden">
+              <img
+                src="/logo.png"
+                alt="StellarFusion Logo"
+                className="w-7 h-7 object-contain"
+              />
             </div>
             <span className="text-xl font-bold">StellarFusion</span>
           </div>
@@ -183,7 +187,7 @@ export default function LandingPage({
             </h1>
 
             <p className="text-xl md:text-2xl text-white/70 mb-12 max-w-3xl mx-auto leading-relaxed">
-              {"A Fusion+ Swap Implementation for EVM <> Stellar"}
+              {"Create and Resolve Intent-Based Cross-Chain Swaps between Stellar <> Ethereum"}
             </p>
 
             <div className="flex flex-col sm:flex-row gap-6 justify-center items-center">
