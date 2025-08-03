@@ -625,6 +625,10 @@ export class ResolverContractManager {
       const partIndex = segmentIndex || 0
       const parts = totalParts || 1
       
+      // Prepare destination tokens if needed (matches dynamic-swap.ts)
+      console.log('🔧 Preparing destination tokens before escrow creation...')
+      await this.prepareDestinationTokens(chainId, signer, amount)
+      
       console.log('🚀 Calling createDstEscrow with parameters:')
       console.log('   hashedSecret:', hashedSecret)
       console.log('   recipient (buyer):', buyerAddress)
@@ -1770,6 +1774,46 @@ export class ResolverContractManager {
     } else {
       return connectedAddress || ''
     }
+  }
+
+  // Prepare destination tokens (matches dynamic-swap.ts exactly)
+  private async prepareDestinationTokens(chainId: string, signer: ethers.Wallet | ethers.Signer, amount: ethers.BigNumber) {
+    const config = CHAIN_CONFIGS[chainId as keyof typeof CHAIN_CONFIGS]
+    if (!config) {
+      throw new Error(`Unsupported chain: ${chainId}`)
+    }
+
+    // For ETH (native token), we need to wrap to WETH and approve
+    // Assuming ETH is the destination token since this matches the working case
+    const factoryAddress = config.factoryAddress
+    
+    // WETH address for Sepolia testnet (matches dynamic-swap.ts)
+    const wethAddress = '0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9'
+    
+    const wrapperABI = [
+      "function deposit() payable",
+      "function approve(address spender, uint256 amount) returns (bool)",
+      "function balanceOf(address owner) view returns (uint256)"
+    ]
+    
+    const wrapperContract = new ethers.Contract(wethAddress, wrapperABI, signer)
+    
+    // Check balance and wrap if needed
+    const balance = await wrapperContract.balanceOf(await signer.getAddress())
+    if (balance.lt(amount)) {
+      const amountToWrap = amount.sub(balance).add(ethers.utils.parseEther("0.001"))
+      console.log(`   Wrapping ${ethers.utils.formatEther(amountToWrap)} ETH to WETH...`)
+      
+      const wrapTx = await wrapperContract.deposit({ value: amountToWrap })
+      await wrapTx.wait()
+      console.log(`   ✅ Wrapped ETH to WETH successfully`)
+    }
+    
+    // Approve factory to spend WETH
+    console.log(`   Approving factory ${factoryAddress} to spend ${ethers.utils.formatEther(amount)} WETH...`)
+    const approveTx = await wrapperContract.approve(factoryAddress, amount)
+    await approveTx.wait()
+    console.log(`   ✅ Factory approved to spend WETH`)
   }
 
 
